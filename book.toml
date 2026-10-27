@@ -1,0 +1,11 @@
+[book]
+authors = ["partrita"]
+language = "ko"
+src = "docs"
+title = "imposter 매뉴얼"
+
+[output.html]
+git-repository-url = "https://github.com/partrita/imposter-cli"
+edit-url-template = "https://github.com/partrita/imposter-cli/edit/main/{path}"
+site-url = "/imposter-cli/"
+cname = ""

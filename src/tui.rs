@@ -1,707 +1,1165 @@
-use crate::config::SessionConfig;
-use crate::types::{Complexity, DevelopmentType, JargonLevel};
-use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+use crate::config::Config;
+use crate::content;
+use crate::jargon;
+use crate::style::Style;
+use crate::types::{Complexity, DevelopmentType, JargonLevel, Theme};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::execute;
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use ratatui::{
-    backend::CrosstermBackend,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{
-        Block, BorderType, Borders, Paragraph,
-    },
-    Frame, Terminal,
-};
-use std::io::{self, stdout, Stdout};
+use ratatui::backend::CrosstermBackend;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style as TuiStyle};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
+use ratatui::{Frame, Terminal};
+use std::io::stdout;
 use std::time::Duration;
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub enum FormField {
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum Field {
+    Style,
+    Theme,
     DevType,
+    Duration,
     Jargon,
     Complexity,
-    ProjectName,
-    Framework,
-    Duration,
     Alerts,
-    Minimal,
-    Team,
-    StartButton,
-    SaveButton,
+    Start,
+    Save,
 }
 
-impl FormField {
-    pub const ALL: [FormField; 11] = [
-        FormField::DevType,
-        FormField::Jargon,
-        FormField::Complexity,
-        FormField::ProjectName,
-        FormField::Framework,
-        FormField::Duration,
-        FormField::Alerts,
-        FormField::Minimal,
-        FormField::Team,
-        FormField::StartButton,
-        FormField::SaveButton,
-    ];
+const FIELDS: [Field; 9] = [
+    Field::Style,
+    Field::Theme,
+    Field::DevType,
+    Field::Duration,
+    Field::Jargon,
+    Field::Complexity,
+    Field::Alerts,
+    Field::Start,
+    Field::Save,
+];
 
-    pub fn next(&self) -> Self {
-        let idx = Self::ALL.iter().position(|f| f == self).unwrap_or(0);
-        Self::ALL[(idx + 1) % Self::ALL.len()]
-    }
-
-    pub fn prev(&self) -> Self {
-        let idx = Self::ALL.iter().position(|f| f == self).unwrap_or(0);
-        if idx == 0 {
-            Self::ALL[Self::ALL.len() - 1]
-        } else {
-            Self::ALL[idx - 1]
+impl Field {
+    fn label(self) -> &'static str {
+        match self {
+            Field::Style => "Style",
+            Field::Theme => "Theme",
+            Field::DevType => "Dev stack",
+            Field::Duration => "Duration",
+            Field::Jargon => "Jargon",
+            Field::Complexity => "Complexity",
+            Field::Alerts => "Lint alerts",
+            Field::Start => "",
+            Field::Save => "",
         }
     }
+
+    fn editable(self) -> bool {
+        matches!(self, Field::Duration)
+    }
 }
 
-pub struct TuiApp {
-    pub config: SessionConfig,
-    pub duration: u64,
-    pub current_field: FormField,
-    pub is_editing: bool,
-    pub edit_buffer: String,
-    pub status_message: Option<(String, Color)>,
-    pub should_start: bool,
-    pub should_exit: bool,
+struct Palette {
+    bg: Color,
+    fg: Color,
+    muted: Color,
+    dim: Color,
+    border: Color,
+    green: Color,
+    red: Color,
+    accent: Color,
+    badge_fg: Color,
 }
 
-impl TuiApp {
-    pub fn new(initial_config: SessionConfig, initial_duration: u64) -> Self {
+struct App {
+    cfg: Config,
+    field: usize,
+    editing: bool,
+    buf: String,
+    status: Option<String>,
+    start: bool,
+    quit: bool,
+}
+
+impl App {
+    fn new(cfg: Config) -> Self {
         Self {
-            config: initial_config,
-            duration: initial_duration,
-            current_field: FormField::DevType,
-            is_editing: false,
-            edit_buffer: String::new(),
-            status_message: None,
-            should_start: false,
-            should_exit: false,
+            cfg,
+            field: 0,
+            editing: false,
+            buf: String::new(),
+            status: None,
+            start: false,
+            quit: false,
         }
     }
 
-    pub fn run_setup(mut self) -> io::Result<Option<(SessionConfig, u64)>> {
-        enable_raw_mode()?;
-        let mut stdout_handle = stdout();
-        execute!(stdout_handle, EnterAlternateScreen)?;
-        let backend = CrosstermBackend::new(stdout_handle);
-        let mut terminal = Terminal::new(backend)?;
-
-        let res = self.event_loop(&mut terminal);
-
-        // Always clean up terminal state before returning
-        let _ = disable_raw_mode();
-        let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
-        let _ = terminal.show_cursor();
-
-        res
+    fn accent(&self) -> Color {
+        if self.cfg.style == Style::Classic {
+            return match self.cfg.theme {
+                Theme::Dark => Color::Rgb(80, 200, 120),
+                Theme::Light => Color::Rgb(17, 99, 41),
+            };
+        }
+        let (r, g, b) = self.cfg.style.skin().rgb_for(self.cfg.theme);
+        Color::Rgb(r, g, b)
     }
 
-    fn event_loop(
-        &mut self,
-        terminal: &mut Terminal<CrosstermBackend<Stdout>>,
-    ) -> io::Result<Option<(SessionConfig, u64)>> {
-        loop {
-            terminal.draw(|f| self.draw_ui(f))?;
-
-            if event::poll(Duration::from_millis(100))? {
-                if let Event::Key(key) = event::read()? {
-                    if key.kind == KeyEventKind::Press {
-                        self.handle_key(key.code, key.modifiers);
-                    }
-                }
-            }
-
-            if self.should_start {
-                return Ok(Some((self.config.clone(), self.duration)));
-            }
-
-            if self.should_exit {
-                return Ok(None);
-            }
+    fn palette(&self) -> Palette {
+        let accent = self.accent();
+        match self.cfg.theme {
+            Theme::Dark => Palette {
+                bg: Color::Reset,
+                fg: Color::White,
+                muted: Color::Gray,
+                dim: Color::DarkGray,
+                border: Color::DarkGray,
+                green: Color::Green,
+                red: Color::Red,
+                accent,
+                badge_fg: Color::Black,
+            },
+            Theme::Light => Palette {
+                bg: Color::Rgb(248, 250, 252),
+                fg: Color::Rgb(15, 23, 42),
+                muted: Color::Rgb(51, 65, 85),
+                dim: Color::Rgb(100, 116, 139),
+                border: Color::Rgb(148, 163, 184),
+                green: Color::Rgb(17, 99, 41),
+                red: Color::Rgb(164, 14, 38),
+                accent,
+                badge_fg: Color::Rgb(248, 250, 252),
+            },
         }
     }
 
-    fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
-        // Global shortcuts
-        if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
-            self.should_exit = true;
+    fn key(&mut self, code: KeyCode, mods: KeyModifiers) {
+        if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+            self.quit = true;
+            return;
+        }
+        if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('s') {
+            self.save();
+            return;
+        }
+        if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('r') {
+            self.start = true;
             return;
         }
 
-        if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('s') || code == KeyCode::F(5) {
-            self.save_config();
-            return;
-        }
-
-        if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('r') {
-            self.should_start = true;
-            return;
-        }
-
-        // Editing mode for text inputs
-        if self.is_editing {
+        if self.editing {
             match code {
-                KeyCode::Enter => {
-                    self.apply_editing();
-                    self.is_editing = false;
-                }
+                KeyCode::Enter => self.commit_edit(),
                 KeyCode::Esc => {
-                    self.is_editing = false;
-                    self.edit_buffer.clear();
+                    self.editing = false;
+                    self.buf.clear();
                 }
                 KeyCode::Backspace => {
-                    self.edit_buffer.pop();
+                    self.buf.pop();
                 }
-                KeyCode::Char(c) => {
-                    self.edit_buffer.push(c);
+                KeyCode::Char(c) if c.is_ascii_digit() && self.buf.len() < 3 => {
+                    self.buf.push(c);
                 }
                 _ => {}
             }
             return;
         }
 
-        // Normal navigation mode
+        self.status = None;
+
         match code {
-            KeyCode::Esc | KeyCode::Char('q') => {
-                self.should_exit = true;
+            KeyCode::Esc | KeyCode::Char('q') => self.quit = true,
+            KeyCode::Up | KeyCode::BackTab | KeyCode::Char('k') => {
+                self.field = (self.field + FIELDS.len() - 1) % FIELDS.len();
             }
-            KeyCode::Tab | KeyCode::Down | KeyCode::Char('j') => {
-                self.current_field = self.current_field.next();
-            }
-            KeyCode::BackTab | KeyCode::Up | KeyCode::Char('k') => {
-                self.current_field = self.current_field.prev();
-            }
-            KeyCode::Enter => {
-                match self.current_field {
-                    FormField::ProjectName => {
-                        self.is_editing = true;
-                        self.edit_buffer = self.config.project_name.clone();
-                    }
-                    FormField::Framework => {
-                        self.is_editing = true;
-                        self.edit_buffer = self.config.framework.clone();
-                    }
-                    FormField::Duration => {
-                        self.is_editing = true;
-                        self.edit_buffer = if self.duration == 0 {
-                            String::new()
-                        } else {
-                            self.duration.to_string()
-                        };
-                    }
-                    FormField::Alerts => self.config.alerts_enabled = !self.config.alerts_enabled,
-                    FormField::Minimal => self.config.minimal_output = !self.config.minimal_output,
-                    FormField::Team => self.config.team_activity = !self.config.team_activity,
-                    FormField::StartButton => self.should_start = true,
-                    FormField::SaveButton => self.save_config(),
-                    FormField::DevType => self.cycle_dev_type(1),
-                    FormField::Jargon => self.cycle_jargon(1),
-                    FormField::Complexity => self.cycle_complexity(1),
-                }
-            }
-            KeyCode::Char(' ') => {
-                match self.current_field {
-                    FormField::Alerts => self.config.alerts_enabled = !self.config.alerts_enabled,
-                    FormField::Minimal => self.config.minimal_output = !self.config.minimal_output,
-                    FormField::Team => self.config.team_activity = !self.config.team_activity,
-                    FormField::DevType => self.cycle_dev_type(1),
-                    FormField::Jargon => self.cycle_jargon(1),
-                    FormField::Complexity => self.cycle_complexity(1),
-                    FormField::StartButton => self.should_start = true,
-                    FormField::SaveButton => self.save_config(),
-                    _ => {}
-                }
+            KeyCode::Down | KeyCode::Tab | KeyCode::Char('j') => {
+                self.field = (self.field + 1) % FIELDS.len();
             }
             KeyCode::Left | KeyCode::Char('h') => {
-                match self.current_field {
-                    FormField::DevType => self.cycle_dev_type(-1),
-                    FormField::Jargon => self.cycle_jargon(-1),
-                    FormField::Complexity => self.cycle_complexity(-1),
-                    FormField::Duration => {
-                        if self.duration >= 5 {
-                            self.duration -= 5;
-                        } else {
-                            self.duration = 0;
-                        }
-                    }
-                    FormField::Alerts => self.config.alerts_enabled = !self.config.alerts_enabled,
-                    FormField::Minimal => self.config.minimal_output = !self.config.minimal_output,
-                    FormField::Team => self.config.team_activity = !self.config.team_activity,
-                    _ => {}
+                if FIELDS[self.field] == Field::Save {
+                    self.field = FIELDS.iter().position(|f| *f == Field::Start).unwrap_or(0);
+                } else {
+                    self.cycle(-1);
                 }
             }
             KeyCode::Right | KeyCode::Char('l') => {
-                match self.current_field {
-                    FormField::DevType => self.cycle_dev_type(1),
-                    FormField::Jargon => self.cycle_jargon(1),
-                    FormField::Complexity => self.cycle_complexity(1),
-                    FormField::Duration => {
-                        self.duration += 5;
-                    }
-                    FormField::Alerts => self.config.alerts_enabled = !self.config.alerts_enabled,
-                    FormField::Minimal => self.config.minimal_output = !self.config.minimal_output,
-                    FormField::Team => self.config.team_activity = !self.config.team_activity,
-                    _ => {}
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn apply_editing(&mut self) {
-        match self.current_field {
-            FormField::ProjectName => {
-                let trimmed = self.edit_buffer.trim();
-                self.config.project_name = if trimmed.is_empty() {
-                    "distributed-cluster".to_string()
+                if FIELDS[self.field] == Field::Start {
+                    self.field = FIELDS.iter().position(|f| *f == Field::Save).unwrap_or(0);
                 } else {
-                    trimmed.to_string()
-                };
-            }
-            FormField::Framework => {
-                self.config.framework = self.edit_buffer.trim().to_string();
-            }
-            FormField::Duration => {
-                if let Ok(parsed) = self.edit_buffer.trim().parse::<u64>() {
-                    self.duration = parsed;
-                } else if self.edit_buffer.trim().is_empty() {
-                    self.duration = 0;
+                    self.cycle(1);
                 }
+            }
+            KeyCode::Char(' ') => match FIELDS[self.field] {
+                Field::Start => self.start = true,
+                Field::Save => self.save(),
+                _ => self.cycle(1),
+            },
+            KeyCode::Char('t') => {
+                self.cfg.theme = cycle(&Theme::ALL, self.cfg.theme, 1);
+            }
+            KeyCode::Char('s') => self.save(),
+            KeyCode::Char(c @ '1'..='6') => {
+                let idx = (c as usize) - ('1' as usize);
+                if idx < Style::ALL.len() {
+                    self.cfg.style = Style::ALL[idx];
+                }
+            }
+            KeyCode::Enter => match FIELDS[self.field] {
+                Field::Start => self.start = true,
+                Field::Save => self.save(),
+                field if field.editable() => {
+                    self.buf = self.cfg.duration.to_string();
+                    self.editing = true;
+                }
+                _ => self.cycle(1),
+            },
+            _ => {}
+        }
+    }
+
+    fn cycle(&mut self, dir: i32) {
+        match FIELDS[self.field] {
+            Field::Style => self.cfg.style = cycle(&Style::ALL, self.cfg.style, dir),
+            Field::Theme => self.cfg.theme = cycle(&Theme::ALL, self.cfg.theme, dir),
+            Field::DevType => {
+                self.cfg.dev_type = cycle(&DevelopmentType::ALL, self.cfg.dev_type, dir)
+            }
+            Field::Jargon => self.cfg.jargon = cycle(&JargonLevel::ALL, self.cfg.jargon, dir),
+            Field::Complexity => {
+                self.cfg.complexity = cycle(&Complexity::ALL, self.cfg.complexity, dir)
+            }
+            Field::Alerts => self.cfg.alerts = !self.cfg.alerts,
+            Field::Duration => {
+                let step = 5i64;
+                let next = self.cfg.duration as i64 + if dir > 0 { step } else { -step };
+                self.cfg.duration = next.clamp(0, crate::cli::MAX_MINUTES as i64) as u64;
             }
             _ => {}
         }
-        self.edit_buffer.clear();
     }
 
-    fn cycle_dev_type(&mut self, delta: isize) {
-        let all = &DevelopmentType::ALL;
-        let cur = all.iter().position(|&x| x == self.config.dev_type).unwrap_or(0);
-        let len = all.len() as isize;
-        let next_idx = ((cur as isize + delta) % len + len) % len;
-        self.config.dev_type = all[next_idx as usize];
+    fn commit_edit(&mut self) {
+        if FIELDS[self.field] == Field::Duration {
+            if let Ok(v) = self.buf.trim().parse::<u64>() {
+                self.cfg.duration = v.min(crate::cli::MAX_MINUTES);
+            }
+        }
+        self.editing = false;
+        self.buf.clear();
     }
 
-    fn cycle_jargon(&mut self, delta: isize) {
-        let all = &JargonLevel::ALL;
-        let cur = all.iter().position(|&x| x == self.config.jargon_level).unwrap_or(0);
-        let len = all.len() as isize;
-        let next_idx = ((cur as isize + delta) % len + len) % len;
-        self.config.jargon_level = all[next_idx as usize];
+    fn save(&mut self) {
+        self.status = Some(match self.cfg.save() {
+            Ok(path) => format!("\u{2713} Saved defaults to {}", path.display()),
+            Err(e) => format!("! Save failed: {e}"),
+        });
     }
 
-    fn cycle_complexity(&mut self, delta: isize) {
-        let all = &Complexity::ALL;
-        let cur = all.iter().position(|&x| x == self.config.complexity).unwrap_or(0);
-        let len = all.len() as isize;
-        let next_idx = ((cur as isize + delta) % len + len) % len;
-        self.config.complexity = all[next_idx as usize];
+    fn draw(&self, f: &mut Frame) {
+        let area = f.area();
+        let pal = self.palette();
+        if self.cfg.theme == Theme::Light {
+            let bg_block = Block::default().style(TuiStyle::default().bg(pal.bg).fg(pal.fg));
+            f.render_widget(bg_block, area);
+        }
+
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Min(13),
+                Constraint::Length(2),
+            ])
+            .split(area);
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(46), Constraint::Percentage(54)])
+            .split(rows[1]);
+
+        self.draw_header(f, rows[0], &pal);
+        self.draw_form(f, cols[0], &pal);
+        self.draw_preview(f, cols[1], &pal);
+        self.draw_footer(f, rows[2], &pal);
     }
 
-    fn save_config(&mut self) {
-        match self.config.save() {
-            Ok(path) => {
-                self.status_message = Some((
-                    format!("Saved to {}", path.display()),
-                    Color::Green,
+    fn draw_header(&self, f: &mut Frame, area: Rect, pal: &Palette) {
+        let mut spans = vec![
+            Span::styled(
+                " imposter ",
+                TuiStyle::default()
+                    .fg(pal.badge_fg)
+                    .bg(pal.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  style ", TuiStyle::default().fg(pal.dim)),
+        ];
+
+        for (i, st) in Style::ALL.iter().enumerate() {
+            let active = *st == self.cfg.style;
+            let num = format!("{}", i + 1);
+            if active {
+                spans.push(Span::styled(
+                    format!(" [{num}:{}] ", st.as_str()),
+                    TuiStyle::default()
+                        .fg(pal.badge_fg)
+                        .bg(pal.accent)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            } else {
+                spans.push(Span::styled(
+                    format!(" {num}:{} ", st.as_str()),
+                    TuiStyle::default().fg(pal.muted),
                 ));
             }
-            Err(e) => {
-                self.status_message = Some((format!("Save error: {}", e), Color::Red));
+            if i + 1 < Style::ALL.len() {
+                spans.push(Span::styled("\u{00b7}", TuiStyle::default().fg(pal.dim)));
             }
+        }
+
+        let theme_badge = match self.cfg.theme {
+            Theme::Dark => "  [t: \u{25d0} dark] ",
+            Theme::Light => "  [t: \u{263c} light] ",
+        };
+        spans.push(Span::styled(
+            theme_badge,
+            TuiStyle::default()
+                .fg(pal.accent)
+                .add_modifier(Modifier::BOLD),
+        ));
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(TuiStyle::default().fg(pal.border))
+            .style(TuiStyle::default().bg(pal.bg).fg(pal.fg));
+        f.render_widget(Paragraph::new(Line::from(spans)).block(block), area);
+    }
+
+    fn draw_form(&self, f: &mut Frame, area: Rect, pal: &Palette) {
+        let dim = TuiStyle::default().fg(pal.dim);
+        let mut lines: Vec<Line> = Vec::with_capacity(20);
+        lines.push(Line::from(""));
+
+        for (i, field) in FIELDS.iter().enumerate() {
+            if matches!(field, Field::Start | Field::Save) {
+                continue;
+            }
+            let selected = i == self.field;
+            let pointer = if selected { " \u{276f} " } else { "   " };
+            let label_style = if selected {
+                TuiStyle::default()
+                    .fg(pal.accent)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                TuiStyle::default().fg(pal.muted)
+            };
+
+            let mut spans = vec![
+                Span::styled(pointer, TuiStyle::default().fg(pal.accent)),
+                Span::styled(format!("{:<12}", field.label()), label_style),
+            ];
+            spans.extend(self.render_field_value(*field, selected, pal));
+            lines.push(Line::from(spans));
+        }
+
+        lines.push(Line::from(""));
+
+        let start_sel = FIELDS[self.field] == Field::Start;
+        let save_sel = FIELDS[self.field] == Field::Save;
+        let start_style = if start_sel {
+            TuiStyle::default()
+                .fg(pal.badge_fg)
+                .bg(pal.accent)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            TuiStyle::default()
+                .fg(pal.accent)
+                .add_modifier(Modifier::BOLD)
+        };
+        let save_style = if save_sel {
+            TuiStyle::default()
+                .fg(pal.badge_fg)
+                .bg(pal.fg)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            TuiStyle::default().fg(pal.muted)
+        };
+
+        lines.push(Line::from(vec![
+            Span::raw("   "),
+            Span::styled(" \u{25b6} Start Session ", start_style),
+            Span::raw("   "),
+            Span::styled(" \u{2713} Save Defaults ", save_style),
+        ]));
+
+        lines.push(Line::from(""));
+        let (desc_title, desc_body) = self.field_description(FIELDS[self.field]);
+        lines.push(Line::from(vec![
+            Span::styled("   \u{2500}\u{2500} ", dim),
+            Span::styled(desc_title, TuiStyle::default().fg(pal.accent)),
+        ]));
+        lines.push(Line::from(vec![
+            Span::raw("   "),
+            Span::styled(desc_body, dim),
+        ]));
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(TuiStyle::default().fg(pal.accent))
+            .style(TuiStyle::default().bg(pal.bg).fg(pal.fg))
+            .title(Span::styled(
+                " Session Configuration ",
+                TuiStyle::default()
+                    .fg(pal.accent)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        f.render_widget(
+            Paragraph::new(lines)
+                .block(block)
+                .wrap(Wrap { trim: false }),
+            area,
+        );
+    }
+
+    fn render_field_value(
+        &self,
+        field: Field,
+        selected: bool,
+        pal: &Palette,
+    ) -> Vec<Span<'static>> {
+        let arrow_style = if selected {
+            TuiStyle::default()
+                .fg(pal.accent)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            TuiStyle::default().fg(pal.dim)
+        };
+        let val_style = if selected {
+            TuiStyle::default().fg(pal.fg).add_modifier(Modifier::BOLD)
+        } else {
+            TuiStyle::default().fg(pal.muted)
+        };
+        let dim = TuiStyle::default().fg(pal.dim);
+
+        match field {
+            Field::Style => {
+                let idx = Style::ALL
+                    .iter()
+                    .position(|s| *s == self.cfg.style)
+                    .unwrap_or(0)
+                    + 1;
+                vec![
+                    Span::styled("\u{2039} ", arrow_style),
+                    Span::styled(format!("{:<12}", self.cfg.style.as_str()), val_style),
+                    Span::styled("\u{203a} ", arrow_style),
+                    Span::styled(format!("({idx}/{})", Style::ALL.len()), dim),
+                ]
+            }
+            Field::Theme => {
+                let dark_active = self.cfg.theme == Theme::Dark;
+                let active_style = TuiStyle::default()
+                    .fg(pal.accent)
+                    .add_modifier(Modifier::BOLD);
+                let inactive_style = TuiStyle::default().fg(pal.dim);
+                if dark_active {
+                    vec![
+                        Span::styled("[\u{25d0} dark ]", active_style),
+                        Span::raw(" "),
+                        Span::styled(" \u{263c} light ", inactive_style),
+                    ]
+                } else {
+                    vec![
+                        Span::styled(" \u{25d0} dark  ", inactive_style),
+                        Span::raw(" "),
+                        Span::styled("[\u{263c} light]", active_style),
+                    ]
+                }
+            }
+            Field::DevType => {
+                let idx = DevelopmentType::ALL
+                    .iter()
+                    .position(|d| *d == self.cfg.dev_type)
+                    .unwrap_or(0)
+                    + 1;
+                vec![
+                    Span::styled("\u{2039} ", arrow_style),
+                    Span::styled(format!("{:<16}", self.cfg.dev_type.as_str()), val_style),
+                    Span::styled("\u{203a} ", arrow_style),
+                    Span::styled(format!("({idx}/{})", DevelopmentType::ALL.len()), dim),
+                ]
+            }
+            Field::Duration => {
+                if self.editing && selected {
+                    return vec![
+                        Span::styled(
+                            format!("{} min\u{2588}", self.buf),
+                            TuiStyle::default()
+                                .fg(pal.accent)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled("  (0 = forever)", dim),
+                    ];
+                }
+                let text = if self.cfg.duration == 0 {
+                    "forever (\u{221e})".to_string()
+                } else {
+                    format!("{} min", self.cfg.duration)
+                };
+                vec![
+                    Span::styled("\u{2039} ", arrow_style),
+                    Span::styled(format!("{text:<12}"), val_style),
+                    Span::styled("\u{203a} ", arrow_style),
+                    Span::styled("(\u{2190}/\u{2192} \u{00b1}5m, Enter type)", dim),
+                ]
+            }
+            Field::Jargon => {
+                let lvl = match self.cfg.jargon {
+                    JargonLevel::Low => 1,
+                    JargonLevel::Medium => 2,
+                    JargonLevel::High => 3,
+                    JargonLevel::Extreme => 4,
+                };
+                let bars = format!("{}{}", "\u{25a0}".repeat(lvl), "\u{25a1}".repeat(4 - lvl));
+                vec![
+                    Span::styled(bars, TuiStyle::default().fg(pal.accent)),
+                    Span::raw(" "),
+                    Span::styled(self.cfg.jargon.as_str().to_string(), val_style),
+                ]
+            }
+            Field::Complexity => {
+                let lvl = match self.cfg.complexity {
+                    Complexity::Low => 1,
+                    Complexity::Medium => 2,
+                    Complexity::High => 3,
+                    Complexity::Extreme => 4,
+                };
+                let bars = format!("{}{}", "\u{25a0}".repeat(lvl), "\u{25a1}".repeat(4 - lvl));
+                vec![
+                    Span::styled(bars, TuiStyle::default().fg(pal.accent)),
+                    Span::raw(" "),
+                    Span::styled(self.cfg.complexity.as_str().to_string(), val_style),
+                ]
+            }
+            Field::Alerts => toggle_spans(self.cfg.alerts, pal),
+            Field::Start | Field::Save => Vec::new(),
         }
     }
 
-    fn draw_ui(&self, f: &mut Frame) {
-        let size = f.area();
-
-        // Main Layout
-        let main_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .margin(1)
-            .constraints([
-                Constraint::Length(3),  // Header
-                Constraint::Min(16),   // Body
-                Constraint::Length(3),  // Footer / Status
-            ])
-            .split(size);
-
-        // Header
-        let header_text = vec![
-            Line::from(vec![
-                Span::styled(" 🚀 RUST STAKEHOLDER SIMULATOR ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                Span::styled("- Interactive Setup Wizard", Style::default().fg(Color::White)),
-            ]),
-        ];
-        let header = Paragraph::new(header_text)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Color::Cyan)),
-            )
-            .alignment(Alignment::Center);
-        f.render_widget(header, main_chunks[0]);
-
-        // Body split: Left (Select Options), Right (Text inputs, Checkboxes, Action Buttons)
-        let body_chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(50),
-                Constraint::Percentage(50),
-            ])
-            .split(main_chunks[1]);
-
-        self.draw_left_column(f, body_chunks[0]);
-        self.draw_right_column(f, body_chunks[1]);
-
-        // Footer / Help Bar
-        let footer_text = if let Some((msg, color)) = &self.status_message {
-            Line::from(vec![
-                Span::styled(" [STATUS] ", Style::default().fg(*color).add_modifier(Modifier::BOLD)),
-                Span::styled(msg.as_str(), Style::default().fg(Color::White)),
-                Span::raw(" | "),
-                Span::styled("Press Enter/Space to dismiss", Style::default().fg(Color::DarkGray)),
-            ])
-        } else {
-            Line::from(vec![
-                Span::styled(" [↑/↓/Tab] ", Style::default().fg(Color::Yellow)),
-                Span::raw("Move  "),
-                Span::styled(" [←/→/Space] ", Style::default().fg(Color::Yellow)),
-                Span::raw("Change  "),
-                Span::styled(" [Enter] ", Style::default().fg(Color::Yellow)),
-                Span::raw("Edit/Select  "),
-                Span::styled(" [Ctrl+S/F5] ", Style::default().fg(Color::Green)),
-                Span::raw("Save  "),
-                Span::styled(" [Ctrl+R/Enter] ", Style::default().fg(Color::Cyan)),
-                Span::raw("Start  "),
-                Span::styled(" [Esc/q] ", Style::default().fg(Color::Red)),
-                Span::raw("Quit"),
-            ])
-        };
-
-        let footer = Paragraph::new(footer_text)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Color::DarkGray)),
-            )
-            .alignment(Alignment::Center);
-        f.render_widget(footer, main_chunks[2]);
-    }
-
-    fn draw_left_column(&self, f: &mut Frame, area: Rect) {
-        let left_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(8), // Dev Type
-                Constraint::Length(5), // Jargon Level
-                Constraint::Length(5), // Complexity
-            ])
-            .split(area);
-
-        // 1. Development Type
-        let is_dev_active = self.current_field == FormField::DevType;
-        let dev_border_color = if is_dev_active { Color::Yellow } else { Color::DarkGray };
-        let dev_types_spans: Vec<Line> = DevelopmentType::ALL
-            .chunks(2)
-            .map(|chunk| {
-                let mut spans = Vec::new();
-                for &dtype in chunk {
-                    let is_selected = dtype == self.config.dev_type;
-                    let prefix = if is_selected { " [●] " } else { " [ ] " };
-                    let style = if is_selected {
-                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(Color::White)
-                    };
-                    spans.push(Span::styled(format!("{}{:<18}", prefix, dtype.as_str()), style));
-                }
-                Line::from(spans)
-            })
-            .collect();
-
-        let dev_box = Paragraph::new(dev_types_spans).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(
-                    " {} Development Domain (←/→ or Enter) ",
-                    if is_dev_active { "▶" } else { " " }
-                ))
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(dev_border_color)),
-        );
-        f.render_widget(dev_box, left_chunks[0]);
-
-        // 2. Jargon Level
-        let is_jargon_active = self.current_field == FormField::Jargon;
-        let jargon_border_color = if is_jargon_active { Color::Yellow } else { Color::DarkGray };
-        let jargon_spans: Vec<Span> = JargonLevel::ALL
-            .iter()
-            .map(|&lvl| {
-                let is_selected = lvl == self.config.jargon_level;
-                let text = format!(" {} {} ", if is_selected { "●" } else { "○" }, lvl.as_str());
-                if is_selected {
-                    Span::styled(text, Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))
+    fn field_description(&self, field: Field) -> (&'static str, String) {
+        match field {
+            Field::Style => {
+                let desc = match self.cfg.style {
+                    Style::Claude => "Anthropic Claude Code v2.1: Clawd banner, \u{276f} prompt, \u{23fa} tools & \u{23bf} tree output.",
+                    Style::Classic => "Legacy stakeholder system log: progress bars, symbol linker & p99 metrics.",
+                    Style::Codex => "OpenAI Codex CLI (codex-rs): >_ header, \u{203a} prompt, \u{2022} Explored/Edited/Ran blocks.",
+                    Style::Opencode => "OpenCode TUI: SplitBorder \u{2503} backgroundPanel header/prompt/tools, Thinking:, \u{2192} Read & \u{25a3} Build.",
+                    Style::Pi => "earendil-works/pi: \u{2580}\u{2588}\u{2580} header, #343541 userMessageBg & #283228 toolSuccessBg boxes, footer.ts.",
+                    Style::Antigravity => "Google Antigravity CLI (agy): dotted horizon banner, \u{25cb} trajectory tools & /statusline HUD.",
+                };
+                ("Active CLI Persona", desc.to_string())
+            }
+            Field::Theme => (
+                "Color Theme (Dark / Light)",
+                "Adapts accent, text, border, and diff contrast for dark or light terminals (shortcut: t)."
+                    .to_string(),
+            ),
+            Field::DevType => {
+                let sample = content::files(self.cfg.dev_type);
+                (
+                    "Target Codebase Files",
+                    format!(
+                        "Touches files like {}, {}, {}",
+                        sample[0], sample[1], sample[2]
+                    ),
+                )
+            }
+            Field::Duration => (
+                "Auto-Stop Timer",
+                "0 runs until Ctrl-C. Set 1-999 minutes to exit cleanly on a deadline.".to_string(),
+            ),
+            Field::Jargon => {
+                let line = jargon::lines(self.cfg.jargon)[0];
+                ("Commit & Status Copy", format!("Sample: \"{line}\""))
+            }
+            Field::Complexity => (
+                "Turn Depth & Plans",
+                if self.cfg.complexity == Complexity::Low {
+                    "Low hides Todo / Plan / Subagents blocks for a quieter stream.".to_string()
                 } else {
-                    Span::styled(text, Style::default().fg(Color::DarkGray))
-                }
-            })
-            .collect();
-
-        let jargon_box = Paragraph::new(vec![Line::from(jargon_spans)]).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(
-                    " {} Technical Jargon Intensity ",
-                    if is_jargon_active { "▶" } else { " " }
-                ))
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(jargon_border_color)),
-        );
-        f.render_widget(jargon_box, left_chunks[1]);
-
-        // 3. Complexity
-        let is_comp_active = self.current_field == FormField::Complexity;
-        let comp_border_color = if is_comp_active { Color::Yellow } else { Color::DarkGray };
-        let comp_spans: Vec<Span> = Complexity::ALL
-            .iter()
-            .map(|&lvl| {
-                let is_selected = lvl == self.config.complexity;
-                let text = format!(" {} {} ", if is_selected { "●" } else { "○" }, lvl.as_str());
-                if is_selected {
-                    Span::styled(text, Style::default().fg(Color::LightBlue).add_modifier(Modifier::BOLD))
-                } else {
-                    Span::styled(text, Style::default().fg(Color::DarkGray))
-                }
-            })
-            .collect();
-
-        let comp_box = Paragraph::new(vec![Line::from(comp_spans)]).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(
-                    " {} Output Complexity & Busyness ",
-                    if is_comp_active { "▶" } else { " " }
-                ))
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(comp_border_color)),
-        );
-        f.render_widget(comp_box, left_chunks[2]);
-    }
-
-    fn draw_right_column(&self, f: &mut Frame, area: Rect) {
-        let right_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3), // Project Name
-                Constraint::Length(3), // Framework
-                Constraint::Length(3), // Duration
-                Constraint::Length(5), // Flags / Toggles
-                Constraint::Length(4), // Action Buttons
-            ])
-            .split(area);
-
-        // Project Name
-        let is_project_active = self.current_field == FormField::ProjectName;
-        let project_border = if is_project_active { Color::Yellow } else { Color::DarkGray };
-        let project_display = if is_project_active && self.is_editing {
-            format!("{}█", self.edit_buffer)
-        } else {
-            self.config.project_name.clone()
-        };
-        let project_p = Paragraph::new(Line::from(vec![
-            Span::styled(" ", Style::default()),
-            Span::styled(project_display, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-            if is_project_active && !self.is_editing {
-                Span::styled("  (Press Enter to edit)", Style::default().fg(Color::DarkGray))
-            } else {
-                Span::raw("")
-            },
-        ])).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" {} Project Identifier ", if is_project_active { "▶" } else { " " }))
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(project_border)),
-        );
-        f.render_widget(project_p, right_chunks[0]);
-
-        // Framework
-        let is_fw_active = self.current_field == FormField::Framework;
-        let fw_border = if is_fw_active { Color::Yellow } else { Color::DarkGray };
-        let fw_display = if is_fw_active && self.is_editing {
-            format!("{}█", self.edit_buffer)
-        } else if self.config.framework.is_empty() {
-            "(Auto / Default)".to_string()
-        } else {
-            self.config.framework.clone()
-        };
-        let fw_p = Paragraph::new(Line::from(vec![
-            Span::styled(" ", Style::default()),
-            Span::styled(
-                fw_display,
-                if self.config.framework.is_empty() {
-                    Style::default().fg(Color::DarkGray)
-                } else {
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+                    "Medium+ injects Todo checklists, Updated Plans, or Subagents trajectory blocks."
+                        .to_string()
                 },
             ),
-            if is_fw_active && !self.is_editing {
-                Span::styled("  (Press Enter to edit)", Style::default().fg(Color::DarkGray))
-            } else {
-                Span::raw("")
-            },
-        ])).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" {} Framework / Tech Stack ", if is_fw_active { "▶" } else { " " }))
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(fw_border)),
-        );
-        f.render_widget(fw_p, right_chunks[1]);
+            Field::Alerts => (
+                "Simulated Failures",
+                "Periodically injects a failing cargo clippy run followed by an automatic fix diff."
+                    .to_string(),
+            ),
+            Field::Start => (
+                "Launch Session",
+                "Press Enter, Space, or Ctrl+R to exit setup and start the fake session."
+                    .to_string(),
+            ),
+            Field::Save => (
+                "Persist Defaults",
+                "Writes current settings to ~/.config/imposter/config.toml.".to_string(),
+            ),
+        }
+    }
 
-        // Duration
-        let is_dur_active = self.current_field == FormField::Duration;
-        let dur_border = if is_dur_active { Color::Yellow } else { Color::DarkGray };
-        let dur_text = if is_dur_active && self.is_editing {
-            format!("{} sec █", self.edit_buffer)
-        } else if self.duration == 0 {
-            "Infinite (Run until Ctrl+C)".to_string()
-        } else {
-            format!("{} seconds", self.duration)
+    fn draw_preview(&self, f: &mut Frame, area: Rect, pal: &Palette) {
+        let fg = TuiStyle::default().fg(pal.fg);
+        let dim = TuiStyle::default().fg(pal.dim);
+        let green = TuiStyle::default().fg(pal.green);
+        let red = TuiStyle::default().fg(pal.red);
+        let bold = TuiStyle::default().fg(pal.fg).add_modifier(Modifier::BOLD);
+        let acc = TuiStyle::default().fg(pal.accent);
+        let acc_bold = TuiStyle::default()
+            .fg(pal.accent)
+            .add_modifier(Modifier::BOLD);
+
+        let file = content::files(self.cfg.dev_type)[0];
+        let prompt = content::PROMPTS[0];
+
+        let mut lines: Vec<Line> = match self.cfg.style {
+            Style::Classic => vec![
+                Line::from(vec![
+                    Span::styled(" \u{25b8} ", acc),
+                    Span::styled("imposter \u{00b7} classic system log", bold),
+                ]),
+                Line::from(Span::styled(
+                    " \u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2591}\u{2591}\u{2591}  73%  analyzing workspace",
+                    green,
+                )),
+                Line::from(Span::styled(
+                    format!(" \u{2713} inspected {file} (194 lines)"),
+                    fg,
+                )),
+                Line::from(Span::styled(
+                    " \u{2713} p99 latency  38 ms \u{00b7} throughput 14.2k req/s",
+                    fg,
+                )),
+                Line::from(Span::styled(
+                    format!(" \u{25b8} {}", jargon::lines(self.cfg.jargon)[0]),
+                    dim,
+                )),
+            ],
+            Style::Claude => {
+                let skin = self.cfg.style.skin();
+                vec![
+                    Line::from(vec![
+                        Span::styled(" \u{256d}\u{2500}\u{2500}\u{2500} ", dim),
+                        Span::styled("\u{273b} ", acc),
+                        Span::styled(skin.title, bold),
+                        Span::styled(" \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{256e}", dim),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(" \u{2502} ", dim),
+                        Span::styled("\u{2590}\u{259b}\u{2588}\u{2588}\u{2588}\u{259c}\u{258c} ", acc),
+                        Span::styled("Welcome back! ", bold),
+                        Span::styled(skin.model, dim),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(" \u{2502} ", dim),
+                        Span::styled("\u{259d}\u{259c}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{259b}\u{2598} ", acc),
+                        Span::styled("~/code/distributed-cluster", dim),
+                    ]),
+                    Line::from(Span::styled(
+                        " \u{2570}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{256f}",
+                        dim,
+                    )),
+                    Line::from(vec![
+                        Span::styled(" \u{276f} ", acc_bold),
+                        Span::styled(prompt, fg),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(" \u{23fa} ", acc),
+                        Span::styled("Read", bold),
+                        Span::styled(format!("({file})"), fg),
+                    ]),
+                    Line::from(Span::styled(
+                        "   \u{23bf}  Read 140 lines (ctrl+o to expand)",
+                        dim,
+                    )),
+                    Line::from(vec![
+                        Span::styled(" \u{23fa} ", acc),
+                        Span::styled("Update", bold),
+                        Span::styled(format!("({file})"), fg),
+                    ]),
+                    Line::from(Span::styled(
+                        "      52 - const MAX_RETRIES: u32 = 3;",
+                        red,
+                    )),
+                    Line::from(Span::styled(
+                        "      52 + const MAX_RETRIES: u32 = 5;",
+                        green,
+                    )),
+                    Line::from(vec![
+                        Span::styled(" \u{273b}", acc),
+                        Span::styled(" Worked for 1m 12s \u{00b7} 3.4k tokens \u{00b7} $0.03", dim),
+                    ]),
+                    Line::from(Span::styled(format!("   {}", skin.footer), dim)),
+                ]
+            }
+            Style::Codex => {
+                let skin = self.cfg.style.skin();
+                vec![
+                    Line::from(vec![
+                        Span::styled(" >_ ", acc_bold),
+                        Span::styled(skin.title, bold),
+                        Span::styled(format!(" \u{00b7} {}", skin.model), dim),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(" \u{203a} ", acc_bold),
+                        Span::styled(prompt, fg),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(" \u{2022} ", acc),
+                        Span::styled("Explored", bold),
+                    ]),
+                    Line::from(Span::styled(
+                        format!("   \u{2514} Read {file} (lines 1\u{2013}140)"),
+                        dim,
+                    )),
+                    Line::from(vec![
+                        Span::styled(" \u{2022} ", acc),
+                        Span::styled("Edited ", bold),
+                        Span::styled(file, fg),
+                        Span::styled(" (+5", green),
+                        Span::styled(" -2)", red),
+                    ]),
+                    Line::from(Span::styled(
+                        "     52 - const MAX_RETRIES: u32 = 3;",
+                        red,
+                    )),
+                    Line::from(Span::styled(
+                        "     52 + const MAX_RETRIES: u32 = 5;",
+                        green,
+                    )),
+                    Line::from(vec![
+                        Span::styled(" \u{2022} ", acc),
+                        Span::styled("Ran ", bold),
+                        Span::styled("cargo test --lib", dim),
+                    ]),
+                    Line::from(Span::styled(
+                        "   \u{2514} test result: ok. 42 passed; 0 failed",
+                        dim,
+                    )),
+                    Line::from(Span::styled(
+                        " \u{2500} Worked for 48s \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+                        dim,
+                    )),
+                    Line::from(Span::styled(format!("   {}", skin.footer), dim)),
+                ]
+            }
+            Style::Opencode => {
+                let skin = self.cfg.style.skin();
+                let (panel_bg, border_fg) = match self.cfg.theme {
+                    Theme::Dark => (Color::Rgb(26, 27, 38), Color::Rgb(72, 79, 106)),
+                    Theme::Light => (Color::Rgb(230, 233, 239), Color::Rgb(148, 163, 184)),
+                };
+                let p_border = TuiStyle::default().fg(border_fg).bg(panel_bg);
+                let p_acc = TuiStyle::default()
+                    .fg(pal.accent)
+                    .bg(panel_bg)
+                    .add_modifier(Modifier::BOLD);
+                let p_bold = TuiStyle::default()
+                    .fg(pal.fg)
+                    .bg(panel_bg)
+                    .add_modifier(Modifier::BOLD);
+                let p_fg = TuiStyle::default().fg(pal.fg).bg(panel_bg);
+                let p_dim = TuiStyle::default().fg(pal.dim).bg(panel_bg);
+                let p_add = TuiStyle::default().fg(pal.green).bg(panel_bg);
+                let p_del = TuiStyle::default().fg(pal.red).bg(panel_bg);
+                vec![
+                    Line::from(vec![
+                        Span::styled(" \u{2503}  ", p_border),
+                        Span::styled("# distributed-cluster          ", p_bold),
+                        Span::styled("39,413  20% ($0.29) ", p_dim),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(" \u{2503}  ", p_acc),
+                        Span::styled(format!("{prompt:<47}"), p_fg),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(" \u{2503}  ", dim),
+                        Span::styled(
+                            "Thinking: Let me inspect the current retry path first.",
+                            dim,
+                        ),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("   \u{2192} ", acc),
+                        Span::styled("Read ", bold),
+                        Span::styled(format!("{file} [offset=1, limit=140]"), dim),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("   \u{2190} ", acc),
+                        Span::styled("Edit ", bold),
+                        Span::styled(file, fg),
+                        Span::styled(" (+5", green),
+                        Span::styled(" -2)", red),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(" \u{2503}  ", p_border),
+                        Span::styled("  52 - const MAX_RETRIES: u32 = 3;             ", p_del),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(" \u{2503}  ", p_border),
+                        Span::styled("  52 + const MAX_RETRIES: u32 = 5;             ", p_add),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(" \u{2503}  ", p_border),
+                        Span::styled("$ cargo test --lib                             ", p_bold),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(" \u{2503}  ", p_border),
+                        Span::styled("test result: ok. 42 passed; 0 failed           ", p_dim),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("   \u{25a3} Build", acc_bold),
+                        Span::styled(format!(" \u{00b7} {} \u{00b7} 4.2s", skin.model), dim),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(" \u{2b1d}\u{2b1d}\u{2b1d}\u{2b1d}\u{2b1d}\u{2b1d}\u{2b1d}\u{2b1d}", acc),
+                        Span::styled(" esc interrupt   ", dim),
+                        Span::styled(skin.footer, dim),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(" ~/code/distributed-cluster (main)   ", dim),
+                        Span::styled("\u{2022} ", green),
+                        Span::styled("LSP  ", dim),
+                        Span::styled("\u{2022} ", green),
+                        Span::styled("MCP  1.2.14", dim),
+                    ]),
+                ]
+            }
+            Style::Pi => {
+                let skin = self.cfg.style.skin();
+                let (user_bg, tool_bg) = match self.cfg.theme {
+                    Theme::Dark => (Color::Rgb(52, 53, 65), Color::Rgb(40, 50, 40)),
+                    Theme::Light => (Color::Rgb(229, 231, 235), Color::Rgb(222, 238, 222)),
+                };
+                let user_style = TuiStyle::default().fg(pal.fg).bg(user_bg);
+                let tool_title = TuiStyle::default()
+                    .fg(pal.accent)
+                    .bg(tool_bg)
+                    .add_modifier(Modifier::BOLD);
+                let tool_dim = TuiStyle::default().fg(pal.dim).bg(tool_bg);
+                let tool_add = TuiStyle::default().fg(pal.green).bg(tool_bg);
+                let tool_del = TuiStyle::default().fg(pal.red).bg(tool_bg);
+                vec![
+                    Line::from(vec![
+                        Span::styled("   \u{2580}\u{2588}\u{2580}  ", acc_bold),
+                        Span::styled(skin.title, bold),
+                        Span::styled("  \u{00b7}  https://pi.dev", dim),
+                    ]),
+                    Line::from(Span::styled(
+                        "   escape          to interrupt     ctrl+o  to expand tool output",
+                        dim,
+                    )),
+                    Line::from(Span::styled(format!("   {prompt:<48}"), user_style)),
+                    Line::from(Span::styled("   Thinking... (ctrl+t to expand)", dim)),
+                    Line::from(Span::styled(
+                        format!(
+                            "   read ~/code/distributed-cluster/{file}:1-140     "
+                        ),
+                        tool_title,
+                    )),
+                    Line::from(Span::styled(
+                        "   ... (140 lines, ctrl+o to expand)                ",
+                        tool_dim,
+                    )),
+                    Line::from(Span::styled(
+                        format!(
+                            "   edit ~/code/distributed-cluster/{file} (+5 -2)   "
+                        ),
+                        tool_title,
+                    )),
+                    Line::from(Span::styled(
+                        "   -52   const MAX_RETRIES: u32 = 3;                ",
+                        tool_del,
+                    )),
+                    Line::from(Span::styled(
+                        "   +52   const MAX_RETRIES: u32 = 5;                ",
+                        tool_add,
+                    )),
+                    Line::from(Span::styled(
+                        " \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+                        acc,
+                    )),
+                    Line::from(Span::styled(" ~/code/distributed-cluster (main)", dim)),
+                    Line::from(Span::styled(format!(" {}", skin.footer), dim)),
+                ]
+            }
+            Style::Antigravity => {
+                let skin = self.cfg.style.skin();
+                vec![
+                    Line::from(Span::styled(
+                        "   \u{00b7}\u{00b7}\u{00b7}\u{00b7}  \u{00b7}\u{00b7}\u{00b7}\u{00b7}\u{00b7}\u{00b7}  \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+                        acc,
+                    )),
+                    Line::from(vec![
+                        Span::styled("   Welcome to the Antigravity CLI. ", bold),
+                        Span::styled(skin.model, acc),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(" \u{276f} ", acc_bold),
+                        Span::styled(prompt, fg),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(" \u{25cb} ", acc),
+                        Span::styled("Read", bold),
+                        Span::styled(format!("({file}:1-140)"), fg),
+                    ]),
+                    Line::from(Span::styled(
+                        "   \u{23bf}  Read 140 lines (ctrl+o to expand)",
+                        dim,
+                    )),
+                    Line::from(vec![
+                        Span::styled(" \u{25cb} ", acc),
+                        Span::styled("Edit", bold),
+                        Span::styled(format!("({file})"), fg),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(format!("   \u{23bf}  Updated {file} ("), dim),
+                        Span::styled("+5", green),
+                        Span::styled(" ", dim),
+                        Span::styled("-2", red),
+                        Span::styled(")", dim),
+                    ]),
+                    Line::from(Span::styled(
+                        "      52 - const MAX_RETRIES: u32 = 3;",
+                        red,
+                    )),
+                    Line::from(Span::styled(
+                        "      52 + const MAX_RETRIES: u32 = 5;",
+                        green,
+                    )),
+                    Line::from(vec![
+                        Span::styled("   READY", green),
+                        Span::styled(" \u{2502} ", dim),
+                        Span::styled(skin.model, acc),
+                        Span::styled(" \u{2502} Ctx [\u{2588}\u{2588}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}] 18%", dim),
+                    ]),
+                    Line::from(Span::styled(format!("   {}", skin.footer), dim)),
+                ]
+            }
         };
-        let dur_p = Paragraph::new(Line::from(vec![
-            Span::styled(" ", Style::default()),
-            Span::styled(dur_text, Style::default().fg(Color::LightYellow).add_modifier(Modifier::BOLD)),
-            Span::styled("  (←/→ ±5s, Enter to type)", Style::default().fg(Color::DarkGray)),
-        ])).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" {} Simulation Duration ", if is_dur_active { "▶" } else { " " }))
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(dur_border)),
-        );
-        f.render_widget(dur_p, right_chunks[2]);
 
-        // Flags / Toggles
-        let flag_lines = vec![
-            self.render_toggle_line(
-                FormField::Alerts,
-                "Critical System Alerts",
-                self.config.alerts_enabled,
-                "Inject unexpected simulated crashes/warnings",
-            ),
-            self.render_toggle_line(
-                FormField::Minimal,
-                "Minimal Output Mode",
-                self.config.minimal_output,
-                "Less ANSI colors for subtler background look",
-            ),
-            self.render_toggle_line(
-                FormField::Team,
-                "Team Collaboration",
-                self.config.team_activity,
-                "Simulate git commits & PR reviews from teammates",
-            ),
-        ];
-        let flags_box = Paragraph::new(flag_lines).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Extra Simulation Options (Space / Enter to toggle) ")
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(Color::DarkGray)),
-        );
-        f.render_widget(flags_box, right_chunks[3]);
+        if self.cfg.complexity != Complexity::Low && self.cfg.style != Style::Classic {
+            lines.push(Line::from(""));
+            match self.cfg.style {
+                Style::Antigravity => {
+                    lines.push(Line::from(vec![
+                        Span::styled(" \u{25cb} ", acc),
+                        Span::styled("Subagents", bold),
+                        Span::styled("(3 active \u{00b7} /agents)", fg),
+                    ]));
+                    lines.push(Line::from(vec![
+                        Span::styled("   \u{23bf}  ", dim),
+                        Span::styled("\u{2713} ", green),
+                        Span::styled("[research] ", acc),
+                        Span::styled("Read the current retry path", dim),
+                    ]));
+                    lines.push(Line::from(vec![
+                        Span::styled("      ", dim),
+                        Span::styled("\u{27f3} ", acc),
+                        Span::styled("[verify]   ", acc),
+                        Span::styled("Cover the 503 path with a test", fg),
+                    ]));
+                }
+                Style::Codex => {
+                    lines.push(Line::from(vec![
+                        Span::styled(" \u{2022} ", acc),
+                        Span::styled("Updated Plan", bold),
+                    ]));
+                    lines.push(Line::from(vec![
+                        Span::styled("   \u{2514} ", dim),
+                        Span::styled("\u{2714} ", green),
+                        Span::styled("Read the current retry path", dim),
+                    ]));
+                }
+                Style::Opencode => {
+                    lines.push(Line::from(vec![
+                        Span::styled(" \u{2503}  ", dim),
+                        Span::styled("# Todo  ", bold),
+                        Span::styled("[\u{2713}] Read retry path  ", dim),
+                        Span::styled("[\u{2022}] Cover 503 test", fg),
+                    ]));
+                }
+                _ => {
+                    lines.push(Line::from(vec![
+                        Span::styled("   \u{2612} ", green),
+                        Span::styled("Read the current retry path  ", dim),
+                        Span::styled("\u{2610} ", dim),
+                        Span::styled("Cover 503 test", fg),
+                    ]));
+                }
+            }
+        }
 
-        // Action Buttons
-        let btn_chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(50),
-                Constraint::Percentage(50),
+        if self.cfg.alerts {
+            lines.push(Line::from(vec![
+                Span::styled("   ! ", red),
+                Span::styled(
+                    "error: this `if` has identical blocks (auto-fixing\u{2026})",
+                    red,
+                ),
+            ]));
+        }
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(TuiStyle::default().fg(pal.border))
+            .style(TuiStyle::default().bg(pal.bg).fg(pal.fg))
+            .title(Span::styled(
+                format!(
+                    " Live Preview ({} \u{00b7} {}) ",
+                    self.cfg.style.as_str(),
+                    self.cfg.theme.as_str()
+                ),
+                TuiStyle::default()
+                    .fg(pal.accent)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        f.render_widget(
+            Paragraph::new(lines)
+                .block(block)
+                .wrap(Wrap { trim: false }),
+            area,
+        );
+    }
+
+    fn draw_footer(&self, f: &mut Frame, area: Rect, pal: &Palette) {
+        let accent = pal.accent;
+        let line = if let Some(status) = &self.status {
+            Line::from(Span::styled(
+                format!(" {status}"),
+                TuiStyle::default().fg(accent).add_modifier(Modifier::BOLD),
+            ))
+        } else if self.editing {
+            Line::from(vec![
+                keycap("Enter", accent),
+                Span::raw(" commit   "),
+                keycap("Backspace", accent),
+                Span::raw(" delete   "),
+                keycap("Esc", accent),
+                Span::raw(" cancel"),
             ])
-            .split(right_chunks[4]);
-
-        let is_start_active = self.current_field == FormField::StartButton;
-        let start_btn = Paragraph::new(Line::from(vec![
-            Span::styled(
-                " ▶ START SIMULATION ",
-                if is_start_active {
-                    Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
-                },
-            ),
-        ]))
-        .alignment(Alignment::Center)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(if is_start_active {
-                    Style::default().fg(Color::Yellow)
-                } else {
-                    Style::default().fg(Color::Green)
-                }),
-        );
-        f.render_widget(start_btn, btn_chunks[0]);
-
-        let is_save_active = self.current_field == FormField::SaveButton;
-        let save_btn = Paragraph::new(Line::from(vec![
-            Span::styled(
-                " 💾 SAVE CONFIG (Ctrl+S) ",
-                if is_save_active {
-                    Style::default().fg(Color::Black).bg(Color::Blue).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)
-                },
-            ),
-        ]))
-        .alignment(Alignment::Center)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(if is_save_active {
-                    Style::default().fg(Color::Yellow)
-                } else {
-                    Style::default().fg(Color::Blue)
-                }),
-        );
-        f.render_widget(save_btn, btn_chunks[1]);
-    }
-
-    fn render_toggle_line<'a>(
-        &self,
-        field: FormField,
-        label: &'a str,
-        value: bool,
-        desc: &'a str,
-    ) -> Line<'a> {
-        let is_active = self.current_field == field;
-        let cursor = if is_active { "▶" } else { " " };
-        let box_symbol = if value { "[x]" } else { "[ ]" };
-        let box_style = if value {
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Line::from(vec![
+                keycap("\u{2191}\u{2193}/jk", accent),
+                Span::raw(" move  "),
+                keycap("\u{2190}\u{2192}/hl", accent),
+                Span::raw(" change  "),
+                keycap("1-6", accent),
+                Span::raw(" style  "),
+                keycap("t", accent),
+                Span::raw(" theme  "),
+                keycap("Ctrl+R", accent),
+                Span::raw(" start  "),
+                keycap("Ctrl+S", accent),
+                Span::raw(" save  "),
+                keycap("q/Esc", accent),
+                Span::raw(" quit"),
+            ])
         };
 
-        Line::from(vec![
-            Span::styled(format!(" {} ", cursor), if is_active { Style::default().fg(Color::Yellow) } else { Style::default() }),
-            Span::styled(box_symbol, box_style),
-            Span::styled(format!(" {:<24}", label), if is_active { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) }),
-            Span::styled(format!(" - {}", desc), Style::default().fg(Color::DarkGray)),
-        ])
+        let help = Block::default()
+            .borders(Borders::TOP)
+            .border_style(TuiStyle::default().fg(pal.border))
+            .style(TuiStyle::default().bg(pal.bg).fg(pal.muted));
+        f.render_widget(
+            Paragraph::new(line)
+                .style(TuiStyle::default().bg(pal.bg).fg(pal.muted))
+                .block(help),
+            area,
+        );
     }
+}
+
+fn toggle_spans(on: bool, pal: &Palette) -> Vec<Span<'static>> {
+    if on {
+        vec![Span::styled(
+            "[\u{25cf} ON ]",
+            TuiStyle::default()
+                .fg(pal.accent)
+                .add_modifier(Modifier::BOLD),
+        )]
+    } else {
+        vec![Span::styled(
+            "[\u{25cb} OFF]",
+            TuiStyle::default().fg(pal.dim),
+        )]
+    }
+}
+
+fn keycap(label: &'static str, accent: Color) -> Span<'static> {
+    Span::styled(
+        format!(" {label} "),
+        TuiStyle::default().fg(accent).add_modifier(Modifier::BOLD),
+    )
+}
+
+fn cycle<T: Copy + PartialEq>(all: &[T], current: T, dir: i32) -> T {
+    let idx = all.iter().position(|v| *v == current).unwrap_or(0) as i32;
+    let n = all.len() as i32;
+    all[(((idx + dir) % n + n) % n) as usize]
+}
+
+pub fn run(cfg: Config) -> Option<Config> {
+    if enable_raw_mode().is_err() {
+        return None;
+    }
+    let mut out = stdout();
+    if execute!(out, EnterAlternateScreen).is_err() {
+        let _ = disable_raw_mode();
+        return None;
+    }
+    let backend = CrosstermBackend::new(out);
+    let mut terminal = match Terminal::new(backend) {
+        Ok(t) => t,
+        Err(_) => {
+            let _ = disable_raw_mode();
+            return None;
+        }
+    };
+
+    let mut app = App::new(cfg);
+    let mut result: Option<Config> = None;
+
+    loop {
+        if terminal.draw(|f| app.draw(f)).is_err() {
+            break;
+        }
+        match event::poll(Duration::from_millis(120)) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(_) => break,
+        }
+        let Ok(Event::Key(key)) = event::read() else {
+            continue;
+        };
+        if key.kind == KeyEventKind::Press {
+            app.key(key.code, key.modifiers);
+        }
+        if app.start {
+            result = Some(app.cfg.clone());
+            break;
+        }
+        if app.quit {
+            break;
+        }
+    }
+
+    let _ = disable_raw_mode();
+    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+    let _ = terminal.show_cursor();
+    result
 }

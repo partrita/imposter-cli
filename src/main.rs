@@ -1,205 +1,94 @@
-use clap::Parser;
-use colored::*;
-use console::Term;
-use rand::prelude::*;
-use rand::rng;
-use std::{
-    env,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    thread,
-    time::{Duration, Instant},
-};
-
-mod activities;
+mod ansi;
+mod classic;
+mod cli;
 mod config;
-mod display;
-mod generators;
+mod content;
+mod jargon;
+mod rng;
+mod setup;
+mod style;
+mod transcript;
+#[cfg(feature = "tui")]
 mod tui;
 mod types;
-use types::{Complexity, DevelopmentType, JargonLevel};
 
-/// A CLI tool that generates impressive-looking terminal output when stakeholders walk by
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    /// Type of development activity to simulate
-    #[arg(short, long, value_enum, default_value_t = DevelopmentType::Backend)]
-    dev_type: DevelopmentType,
+use ansi::Ui;
+use std::time::{Duration, Instant};
 
-    /// Level of technical jargon in output
-    #[arg(short, long, value_enum, default_value_t = JargonLevel::Medium)]
-    jargon: JargonLevel,
+pub fn expired(deadline: Option<Instant>) -> bool {
+    match deadline {
+        Some(at) => Instant::now() >= at,
+        None => false,
+    }
+}
 
-    /// How busy and complex the output should appear
-    #[arg(short, long, value_enum, default_value_t = Complexity::Medium)]
-    complexity: Complexity,
+fn interactive(args: &cli::Args) -> config::Config {
+    #[cfg(feature = "tui")]
+    {
+        if Ui::stdout_is_tty() {
+            if let Some(cfg) = tui::run(config::Config::from_args(args)) {
+                return cfg;
+            }
+            std::process::exit(0);
+        }
+    }
+    setup::run(args)
+}
 
-    /// Duration in seconds to run (0 = run until interrupted)
-    #[arg(short = 'T', long, default_value_t = 0)]
-    duration: u64,
+/// First launch with no arguments and no saved config: open the setup TUI
+/// instead of dropping straight into a session. The result is saved so the
+/// next run starts immediately.
+fn no_args() -> bool {
+    std::env::args_os().len() == 1
+}
 
-    /// Show critical system alerts or issues
-    #[arg(short, long, default_value_t = false)]
-    alerts: bool,
-
-    /// Simulate a specific project
-    #[arg(short, long, default_value = "distributed-cluster")]
-    project: String,
-
-    /// Use less colorful output
-    #[arg(long, default_value_t = false)]
-    minimal: bool,
-
-    /// Show team collaboration activity
-    #[arg(short, long, default_value_t = false)]
-    team: bool,
-
-    /// Simulate a specific framework usage
-    #[arg(short = 'F', long, default_value = "")]
-    framework: String,
-
-    /// Open interactive TUI setup wizard
-    #[arg(short = 'i', long, default_value_t = false)]
-    interactive: bool,
+fn first_run() -> bool {
+    no_args() && Ui::stdout_is_tty() && !config::Config::path().map(|p| p.exists()).unwrap_or(false)
 }
 
 fn main() {
-    let raw_args: Vec<String> = env::args().collect();
-    let has_explicit_args = raw_args.len() > 1;
+    let args = cli::parse();
 
-    let args = Args::parse();
-
-    // Determine whether to run interactive TUI:
-    // Run TUI if user explicitly passed -i/--interactive OR if run without any CLI arguments
-    let run_tui = args.interactive || !has_explicit_args;
-
-    let (config, duration) = if run_tui {
-        // Load saved config if exists, otherwise fallback to defaults or CLI args
-        let base_config = config::SessionConfig::load_saved().unwrap_or_else(|| config::SessionConfig {
-            dev_type: args.dev_type,
-            jargon_level: args.jargon,
-            complexity: args.complexity,
-            alerts_enabled: args.alerts,
-            project_name: args.project.clone(),
-            minimal_output: args.minimal,
-            team_activity: args.team,
-            framework: args.framework.clone(),
-        });
-
-        let app = tui::TuiApp::new(base_config, args.duration);
-        match app.run_setup() {
-            Ok(Some((cfg, dur))) => (cfg, dur),
-            Ok(None) => {
-                // User cancelled / exited setup
-                println!("{}", "Setup cancelled.".yellow());
-                return;
-            }
-            Err(e) => {
-                eprintln!("Failed to launch TUI: {}. Falling back to CLI mode.", e);
-                (
-                    config::SessionConfig {
-                        dev_type: args.dev_type,
-                        jargon_level: args.jargon,
-                        complexity: args.complexity,
-                        alerts_enabled: args.alerts,
-                        project_name: args.project,
-                        minimal_output: args.minimal,
-                        team_activity: args.team,
-                        framework: args.framework,
-                    },
-                    args.duration,
-                )
-            }
+    let setup_now = args.interactive || first_run();
+    let cfg = if setup_now {
+        let cfg = interactive(&args);
+        if !args.interactive {
+            let _ = cfg.save();
         }
+        cfg
+    } else if no_args() {
+        // A bare `imposter` uses the saved settings; any explicit flag wins.
+        config::Config::load().unwrap_or_else(|| config::Config::from_args(&args))
     } else {
-        (
-            config::SessionConfig {
-                dev_type: args.dev_type,
-                jargon_level: args.jargon,
-                complexity: args.complexity,
-                alerts_enabled: args.alerts,
-                project_name: args.project,
-                minimal_output: args.minimal,
-                team_activity: args.team,
-                framework: args.framework,
-            },
-            args.duration,
-        )
+        config::Config::from_args(&args)
     };
 
-    let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
+    if args.save && !setup_now {
+        match cfg.save() {
+            Ok(path) => eprintln!("saved settings to {}", path.display()),
+            Err(e) => eprintln!("could not save settings: {e}"),
+        }
+    }
 
-    ctrlc::set_handler(move || {
-        r.store(false, Ordering::SeqCst);
-    })
-    .expect("Error setting Ctrl-C handler");
+    // No color or animation when piped: output stays grep-able and cheap.
+    let color = std::env::var_os("NO_COLOR").is_none() && Ui::stdout_is_tty();
+    if color {
+        ansi::enable_ansi();
+    }
+    let animate = color && !args.fast;
+    let mut ui = Ui::new(color, animate, cfg.theme);
+    let mut rng = rng::Rng::new(args.seed);
 
-    let term = Term::stdout();
-    let _ = term.clear_screen();
-
-    // Display an initial "system boot" to set the mood
-    display::display_boot_sequence(&config);
-
-    let start_time = Instant::now();
-    let target_duration = if duration > 0 {
-        Some(Duration::from_secs(duration))
+    let deadline = if cfg.duration > 0 {
+        Some(Instant::now() + Duration::from_secs(cfg.duration * 60))
     } else {
         None
     };
 
-    while running.load(Ordering::SeqCst) {
-        if let Some(duration) = target_duration {
-            if start_time.elapsed() >= duration {
-                break;
-            }
-        }
-
-        // Based on complexity, determine how many activities to show simultaneously
-        let activities_count = match config.complexity {
-            Complexity::Low => 1,
-            Complexity::Medium => 2,
-            Complexity::High => 3,
-            Complexity::Extreme => 4,
-        };
-
-        // Randomly select and run activities
-        let mut activities: Vec<fn(&config::SessionConfig)> = vec![
-            activities::run_code_analysis,
-            activities::run_performance_metrics,
-            activities::run_system_monitoring,
-            activities::run_data_processing,
-            activities::run_network_activity,
-        ];
-        activities.shuffle(&mut rng());
-
-        for activity in activities.iter().take(activities_count) {
-            activity(&config);
-
-            // Random short pause between activities
-            let pause_time = rng().random_range(100..500);
-            thread::sleep(Duration::from_millis(pause_time));
-
-            // Check if we should exit
-            if !running.load(Ordering::SeqCst)
-                || (target_duration.is_some() && start_time.elapsed() >= target_duration.unwrap())
-            {
-                break;
-            }
-        }
-
-        if config.alerts_enabled && rng().random_ratio(1, 10) {
-            display::display_random_alert(&config);
-        }
-
-        if config.team_activity && rng().random_ratio(1, 5) {
-            display::display_team_activity(&config);
-        }
+    match cfg.style {
+        style::Style::Classic => classic::run(&mut ui, &cfg, &args, &mut rng, deadline),
+        _ => transcript::run(&mut ui, &cfg, &args, &mut rng, deadline),
     }
 
-    let _ = term.clear_screen();
-    println!("{}", "Session terminated.".bright_green());
+    ui.flush();
 }
