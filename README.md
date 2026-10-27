@@ -1,13 +1,15 @@
 # imposter
 
-**아무것도 하지 않으면서, Claude Code로 바이브 코딩하는 것처럼 보이는 CLI.**
+**아무것도 하지 않으면서, 최신 AI 코딩 에이전트로 바이브 코딩하는 것처럼 보이는 Rust CLI.**
 
-터미널에 가짜 Claude Code 세션을 그려줍니다. 파일은 하나도 바뀌지 않고, 토큰도 한 개도 쓰지 않습니다.
-사람들이 지나갈 때 화면만 보면 "저 사람 뭐 대단한 걸 하고 있네"가 됩니다.
+터미널 화면에 실제 AI 코딩 에이전트(Claude Code, OpenAI Codex, OpenCode, Pi, Google Antigravity 등)의 작업 흐름을 사실적으로 그려줍니다. 파일은 단 하나도 변경되지 않으며, 모델 호출이나 토큰 소비도 0개입니다.
 
-> **SATIRE ALERT** — 농담 프로젝트입니다. 실제로 무언가를 해내는 척하는 도구이고, 그 이상은 아닙니다.
+지나가는 동료나 상사가 화면을 슬쩍 보면 "저 사람 지금 고난도 분산 시스템 최적화와 리팩터링에 몰입하고 있구나"라는 인상을 줍니다.
 
-```
+> [!WARNING]
+> **Satire / 풍자 안내** — 본 프로젝트는 유머와 풍자를 목적으로 개발되었습니다. 실제 업무 성과 증빙이나 보고 용도로 악용해서는 안 됩니다.
+
+```text
 ╭─── ✻ Claude Code v2.1.76 ──────────────────────────────────────────────╮
 │         Welcome back!          │ Tips for getting started              │
 │                                │ Run /init to create a CLAUDE.md       │
@@ -49,366 +51,207 @@
 
 ---
 
-## 이번 개편에서 바뀐 것
+## 주요 개선 및 차이점
 
-| 항목 | 이전 (`rust-stakeholder`) | 지금 (`imposter`) |
+| 항목 | 원작 (`rust-stakeholder`) | 개편 후 (`imposter`) |
 | --- | --- | --- |
-| 이름 | rust-stakeholder | **imposter** |
-| 화면 | 진행바 + 시스템 로그 | **`--style` 6종** (AI CLI 5종 + classic, 기본 `claude`) |
-| 의존성 | 224개 패키지 | **코어 0개** (TUI는 선택 기능) |
-| 바이너리 | 여러 MB (224개 크레이트) | **377 KB** (TUI 제외) · **558 KB** (기본) |
-| 최대 RSS | 이 저장소에서 측정하지 않음 | **약 2 MB** |
-| 설정 화면 | ratatui 전체 화면 TUI | **ratatui TUI** (`-i`, TTY) 또는 stdin 질문 |
-| 설정 파일 | serde + toml | 40줄 직접 파서 |
-| 배포 | 수동 | **GitHub Actions → crates.io + 5개 플랫폼 바이너리** |
-| 지원 OS | Linux | **Linux · macOS · Windows** |
-| Ctrl-C | 핸들러 스레드 필요 | 그냥 종료 (일반 출력 모드는 터미널 상태를 건드리지 않음) |
+| **이름** | rust-stakeholder | **imposter** |
+| **화면 페르소나** | 고정된 시스템 엔지니어링 로그 | **6가지 스타일** (Claude, Codex, OpenCode, Pi, Antigravity, Classic) |
+| **외부 의존성** | 224개 크레이트 | **코어 0개** (TUI는 선택 기능으로 분리) |
+| **바이너리 용량** | 수 MB 이상 | **약 377 KB** (TUI 제외) · **약 558 KB** (기본 빌드) |
+| **메모리 점유율 (RSS)** | 미측정 | **약 2 MB 내외** |
+| **설정 인터페이스** | 단순 설정 창 | **실시간 라이브 프리뷰를 지원하는 대화형 TUI** (`-i`) |
+| **설정 파일 파서** | serde + toml 라이브러리 | **40줄 내외의 자체 경량 TOML 파서** |
+| **자동 배포 파이프라인** | 수동 릴리스 | **GitHub Actions → crates.io 및 5대 OS 바이너리 자동 배포** |
+| **지원 운영체제** | Linux 중심 | **Linux · macOS · Windows 완벽 지원** |
+| **종료 동작** | 별도 핸들러 스레드 필요 | **즉각 종료** (일반 스크롤 모드는 터미널 상태를 오염시키지 않음) |
 
-### 왜 이렇게 가벼운가
+### 극단적인 경량화 비결
 
-- **코어 런타임 의존성 0개.** `clap`, `serde`, `toml`, `indicatif`, `rand`, `colored`,
-  `console`, `ctrlc` 없이 표준 라이브러리만 씁니다. TUI만 `ratatui` + `crossterm`을
-  선택 기능(`tui`, 기본 켜짐)으로 씁니다.
-- **`--no-default-features`로 TUI를 통째로 뺄 수 있습니다.** 그 빌드는 377 KB이고
-  런타임 의존성이 정말 0개입니다.
-- **스레드 없음, async 런타임 없음.** 메인 스레드 하나가 `write` + `sleep`만 합니다.
-- **일반 출력 모드는 대체 화면(alternate screen)도 raw mode도 쓰지 않습니다.**
-  전체 화면을 다시 그리지 않고 한 줄씩 흘려보냅니다. TUI는 `-i`로 설정할 때만
-  잠깐 켜졌다가 원래 화면으로 돌아옵니다.
-- **8 KB 출력 버퍼 하나 + 줄 버퍼 재사용.** 한 줄을 `String` 버퍼에 조립해서
-  `write_all` 한 번으로 내보내고, ANSI 코드는 스타일이 실제로 바뀔 때만 넣습니다.
-- **파이프가 닫히면 즉시 종료.** `imposter | head`가 CPU를 태우며 영원히 돌지 않습니다.
-- **난수는 xorshift64\* 16바이트.** `/dev/urandom`도, `rand` 크레이트도 필요 없습니다.
-- **릴리스 프로필**: `opt-level = "z"`, `lto`, `codegen-units = 1`, `panic = "abort"`, `strip`.
-- TTY가 아니면 자동으로 색/애니메이션을 끕니다. `imposter | head`는 그냥 텍스트입니다.
-
-측정 방법은 [로컬 개발](#로컬-개발) 섹션에 있습니다.
+- **런타임 의존성 0개 (Core)**: `clap`, `serde`, `tokio`, `rand`, `regex` 등 무거운 크레이트를 배제하고 순수 Rust 표준 라이브러리(`std`)만 사용합니다. TUI만 `features = ["tui"]`로 격리되어 있습니다.
+- **`--no-default-features` 지원**: TUI 기능마저 제외하면 바이너리 용량이 377 KB 수준으로 줄어들며, 외부 의존성이 완전히 0개가 됩니다.
+- **스레드 및 비동기 런타임 배제**: 메인 스레드 하나가 단일 루프 안에서 정밀한 타이밍으로 I/O와 휴식을 수행합니다.
+- **스트리밍 I/O 렌더러**: 화면 전체를 다시 그리는 Alternate Screen(대체 화면)이나 Raw Mode를 사용하지 않고, 8 KB 내부 고정 버퍼와 재사용 줄 버퍼를 통해 매 줄마다 단 한 번의 커널 호출(`write_all`)로 부드럽게 출력합니다.
+- **16바이트 PRNG & 덱(Deck) 시스템**: `/dev/urandom`이나 무거운 난수 라이브러리 없이 초고속 `xorshift64*` 알고리즘과 Fisher-Yates 셔플 덱으로 반복 없는 다채로운 대사를 구성합니다.
 
 ---
 
-## 설치
+## 설치 가이드
 
-crates.io:
+### 1. crates.io를 통한 설치 (권장)
 
 ```bash
 cargo install imposter
 ```
 
-Git에서 바로:
+### 2. Git 저장소에서 직접 빌드 및 설치
 
 ```bash
 cargo install --git https://github.com/partrita/imposter-cli
 ```
 
-Nix:
+### 3. 초소형 제로 의존성 빌드 (TUI 제외)
+
+```bash
+cargo install imposter --no-default-features
+```
+
+### 4. Nix 환경
 
 ```bash
 nix run github:partrita/imposter-cli
 ```
 
-Docker (scratch 이미지, 바이너리만 들어 있음):
+### 5. Docker 컨테이너 (바이너리 전용 scratch 이미지)
 
 ```bash
 docker build -t imposter .
-docker run -t --rm imposter --duration 1   # 1분
+docker run -t --rm imposter --duration 1   # 1분 후 자동 종료
 ```
 
-사전 빌드된 바이너리: [Releases](https://github.com/partrita/imposter-cli/releases)에서
-OS/아키텍처에 맞는 파일을 받으면 Rust 없이 실행할 수 있습니다.
+### 6. 사전 빌드된 바이너리 다운로드
 
-### 지원 플랫폼
+Rust 개발 도구가 없는 환경에서는 [GitHub Releases](https://github.com/partrita/imposter-cli/releases)에서 운영체제별 압축 파일을 내려받아 즉시 실행할 수 있습니다:
 
-| OS | 아키텍처 | 배포 파일 |
+| 운영체제 | 아키텍처 | 배포 파일명 |
 | --- | --- | --- |
 | Linux | x86_64 | `imposter-<version>-x86_64-unknown-linux-gnu.tar.gz` |
 | Linux | arm64 | `imposter-<version>-aarch64-unknown-linux-gnu.tar.gz` |
-| macOS | Apple Silicon | `imposter-<version>-aarch64-apple-darwin.tar.gz` |
-| macOS | Intel | `imposter-<version>-x86_64-apple-darwin.tar.gz` |
+| macOS | Apple Silicon (M 시리즈) | `imposter-<version>-aarch64-apple-darwin.tar.gz` |
+| macOS | Intel (x86_64) | `imposter-<version>-x86_64-apple-darwin.tar.gz` |
 | Windows | x86_64 | `imposter-<version>-x86_64-pc-windows-msvc.zip` |
 
-- Windows 10/11: 콘솔 ANSI 처리를 자동으로 켭니다. Windows Terminal 권장.
-- macOS/Linux: 추가 설정 없이 동작합니다.
-- 모든 릴리스에 `SHA256SUMS.txt`가 함께 올라갑니다.
-- MSRV는 1.88입니다 (TUI 의존성 기준). 코어만 빌드해도 매니페스트 선언은 동일합니다.
+- Windows 10/11: 콘솔의 ANSI 트루컬러 처리를 자동으로 활성화합니다 (Windows Terminal 권장).
+- macOS / Linux: 별도 설정 없이 바로 동작합니다.
+- 모든 릴리스 아티팩트에는 무결성 검증용 `SHA256SUMS.txt`가 함께 제공됩니다.
 
-소스에서 빌드:
+---
+
+## 기본 사용법
 
 ```bash
-# Linux / macOS
-cargo install imposter
+# 기본 실행 (설정 파일이 없으면 첫 1회 TUI 마법사 자동 실행, 이후 Claude 스타일)
+imposter
 
-# Windows (PowerShell)
-cargo install imposter
+# 5분 동안 실행 후 깔끔하게 종료 (자동 정지 타이머)
+imposter --duration 5
 
-# TUI 없이 가장 작게
-cargo install imposter --no-default-features
+# 대화형 설정 마법사 직접 실행
+imposter -i
+
+# 스타일 선택 실행
+imposter --style opencode                     # OpenCode 스타일
+imposter --style antigravity                  # Google Antigravity CLI 스타일
+imposter --style pi                           # Pi Agent 스타일
+imposter --style codex                        # OpenAI Codex 스타일
+imposter --classic                            # 원작 레거시 시스템 로그 스타일
+
+# 라이트 모드(밝은 터미널 배경용 고대비 테마)로 실행
+imposter --style opencode --light
+
+# 가짜 린트/컴파일 에러 자동 복구 시나리오 활성화
+imposter --alerts
+
+# 백엔드 또는 프론트엔드 개발자 페르소나 설정
+imposter --dev-type backend
+imposter --dev-type frontend
+
+# 타이핑 딜레이를 끄고 초고속으로 출력 (GIF 녹화 또는 CI 검증용)
+imposter --fast --seed 42
 ```
 
 ---
 
-## 사용법
+## 지원 스타일 상세
 
-```bash
-imposter                                     # 첫 실행은 TUI 설정, 이후 Claude Code 스타일로 계속
-imposter --duration 5                        # 5분만
-imposter --classic                           # 예전 시스템 로그 스타일
-imposter --dev-type backend                  # 백엔드 개발자 흉내
-imposter --alerts                            # 가짜 lint 에러 → 가짜 수정
-imposter --fast --seed 42                    # 애니메이션 없이, 재현 가능하게
-imposter -i                                  # TUI로 설정 (TTY가 아니면 질문 모드)
-imposter --style codex                       # Codex 스타일
-imposter --style opencode --duration 2       # opencode 스타일, 2분
-```
+`-s, --style <이름>` 옵션을 통해 원하는 AI 에이전트의 화면을 선택할 수 있습니다. 각 스타일은 실제 CLI 도구의 폰트 기호, 박스 보더, 툴 트리, 상태바 배치를 정밀하게 모사했습니다:
 
-### 스타일
+| 스타일 식별자 | 대상 CLI 에이전트 | 주요 시각적 특징 |
+|---|---|---|
+| `claude` *(기본)* | Anthropic Claude Code v2.1 | 2단 Clawd 마스코트 환영 박스, `───` 구분선과 `❯` 프롬프트, `⏺` 불릿과 `⎿` 들여쓰기 트리, `⏵⏵ accept edits on` |
+| `codex` | OpenAI Codex (`codex-rs`) | `>_` 헤더, `›` 프롬프트, `• Explored` / `• Edited` / `• Ran` 3단계 블록과 `└` 트리, `─ Worked for Xs ──` 분할선 |
+| `opencode` | OpenCode TUI (`anomalyco/opencode`) | SolidJS 기반 TUI의 `SplitBorder`(`┃`) + 전체 폭 `backgroundPanel`, `Thinking:`, `→ Read` 인라인 툴, `$ cmd` / `# Todo` 블록 툴, 4개 구역 상태바 |
+| `pi` | Pi Agent (`earendil-works/pi`) | `▀█▀ / █▀█` 블록 헤더, 단일 열 핫키 안내, `#343541` 사용자 메시지 박스 및 `#283228` 성공 툴 박스, `footer.ts` 토큰/비용 2줄 바 |
+| `antigravity` | Google Antigravity CLI (`agy`) | `····` 점선 호라이즌 배너, `○ Read(...)` / `○ Edit(...)` 트래젝토리 로그, 10개 구역 `/statusline` 실시간 HUD |
+| `classic` | 시스템 엔지니어 로그 | 원작 `rust-stakeholder`의 프로그레스 바 부팅 화면, 심볼 링커, p99 레이턴시 및 기술 용어 로그 |
 
-`-s, --style` 하나로 화면 전체를 고릅니다. 각 AI CLI 스타일은 실제 에이전트 TUI의
-헤더·프롬프트·툴 호출·상태바 레이아웃을 그대로 재현하며, `classic`은 별도의 시스템 로그 렌더러를 씁니다.
-
-| 값 | 화면 | 특징 |
-| --- | --- | --- |
-| `claude` (기본) | Claude Code v2.1 | 2단 Clawd 픽셀 마스코트 환영 박스, `───` + `❯` 프롬프트, `⏺` 불릿 + `⎿` 트리, `⏵⏵ accept edits on` |
-| `codex` | OpenAI Codex (`codex-rs`) | `>_` 헤더, `›` 프롬프트, `• Explored` / `• Edited` / `• Ran` + `└` 트리, `─ Worked for Xs ───` 구분선 |
-| `opencode` | OpenCode TUI (`anomalyco/opencode`) | `SplitBorder`(`┃`) + `backgroundPanel` 세션 헤더(`# title` + 토큰/비용)·프롬프트·블록 툴(`$ cmd`, `# Todo`), `┃  Thinking:`, `→ Read` / `✱ Glob` / `✱ Grep` / `← Edit`, `▣ Build · qwen3.5-27b`, 하단 프롬프트 바 + `• LSP  • MCP  1.2.14` |
-| `pi` | Pi (`earendil-works/pi`) | `▀█▀ / █▀█` 로고·핫키·`[context]` 헤더, `#343541` `userMessageBg` 박스, `Thinking... (ctrl+t)`, `#283228` `toolSuccessBg` 배경 박스(`read`/`edit`/`$`), `footer.ts` 2줄 상태바 |
-| `antigravity` | Google Antigravity CLI (`agy`) | `···· / ────────` 호라이즌 배너 + `Welcome to the Antigravity CLI.`, `○ Read(...)` / `○ Edit(...)` / `○ Bash(...)` / `○ Subagents(...)` + `⎿` 트래젝토리(`ctrl+o`), 10블록 `/statusline` HUD |
-| `classic` | 예전 시스템 로그 | 부팅 진행바, 코드 분석/메트릭/네트워크 로그 |
-
-각 AI CLI 스타일은 실제 TUI를 기준으로 맞췄으며, 모든 스타일에서 **다크 모드(`--dark`)와 라이트 모드(`--light`)** 팔레트를 지원합니다. 좁은 터미널에서는 상자와 푸터가 자동으로 줄어듭니다.
-`-i`로 열리는 **ratatui 설정 TUI**에서는 상단 스타일 탭(`1`~`6`), 테마 전환(`t`), `jk`/`hl` 및 방향키 조작, 레벨 게이지(`■■□□`),
-실시간 스타일·테마·스택·복잡도·알림이 즉시 반영되는 라이브 프리뷰, 필드별 상세 가이드를 제공합니다.
-
-출력은 `Deck`(섞은 주머니)으로 뽑기 때문에 한 바퀴가 끝나기 전에는 같은 대사가
-다시 나오지 않습니다. 파일 목록·프롬프트·툴 출력·디프도 각각 독립적인 주머니라
-세션이 길어져도 같은 장면이 연속으로 반복되지 않습니다.
-
-### 옵션
-
-| 옵션 | 설명 |
-| --- | --- |
-| `-s, --style <NAME>` | `claude` `codex` `opencode` `pi` `antigravity` `classic` (기본 `claude`) |
-| `--claude` / `--classic` | `--style claude` / `--style classic` 단축키 |
-| `-t, --theme <MODE>` | `dark` `light` (기본 `dark`) |
-| `--dark` / `--light` | `--theme dark` / `--theme light` 단축키 |
-| `-d, --dev-type <TYPE>` | `backend` `frontend` `fullstack` `data-science` `devops` `blockchain` `machine-learning` `systems` `game-dev` `security` |
-| `-T, --duration <MINUTES>` | N분 뒤 종료, 0~999 (0 = 무한, 기본값 0) |
-| `-a, --alerts` | 가짜 lint 에러 → 가짜 수정 |
-| `-j, --jargon <LEVEL>` | `low` `medium` `high` `extreme` |
-| `-c, --complexity <LEVEL>` | `low` `medium` `high` `extreme` |
-| `-i, --interactive` | TUI 설정 (TTY가 아니면 stdin 질문) 후 실행. 설정 파일이 없으면 인자 없이 실행해도 자동으로 열림 |
-| `--save` | 현재 설정을 `~/.config/imposter/config.toml`에 저장 |
-| `--fast` | 애니메이션 끔 (GIF 녹화, CI용) |
-| `--seed <N>` | 출력 고정 |
+모든 스타일은 다크 모드(`--dark`)와 라이트 모드(`--light`)를 완벽하게 지원하며, 터미널 가로 폭이 좁아지면 레이아웃이 유연하게 축소됩니다.
 
 ---
 
-## 로컬 개발
+## 커맨드라인 옵션 레퍼런스
 
-### 1. 클론하고 바로 실행
+| 옵션 | 설명 | 기본값 |
+|---|---|---|
+| `-s, --style <NAME>` | 시각적 스타일 선택 (`claude`, `codex`, `opencode`, `pi`, `antigravity`, `classic`) | `claude` |
+| `--claude` / `--classic` | `--style claude` / `--style classic` 단축 플래그 | - |
+| `-t, --theme <MODE>` | 색상 테마 선택 (`dark`, `light`) | `dark` |
+| `--dark` / `--light` | `--theme dark` / `--theme light` 단축 플래그 | - |
+| `-d, --dev-type <TYPE>` | 대상 코드베이스 기술 스택 (`backend`, `frontend`, `fullstack`, `data-science`, `devops`, `blockchain`, `machine-learning`, `systems`, `game-dev`, `security`) | `backend` |
+| `-T, --duration <MINUTES>` | 자동 종료 타이머 (분 단위, `0`은 무한 지속) | `0` |
+| `-a, --alerts` | 주기적 린트/컴파일 에러 발생 및 자동 수정 시나리오 활성화 | 끔 |
+| `-j, --jargon <LEVEL>` | 기술 전문 용어 난이도 (`low`, `medium`, `high`, `extreme`) | `medium` |
+| `-c, --complexity <LEVEL>` | 턴 전개 깊이 및 복잡도 (`low`, `medium`, `high`, `extreme`) | `medium` |
+| `-i, --interactive` | 대화형 TUI 설정 마법사 실행 (비-TTY 환경에서는 텍스트 문답으로 대체) | - |
+| `--save` | 현재 전달된 인자값들을 `~/.config/imposter/config.toml`에 기본값으로 저장 | - |
+| `--fast` | 타이핑 딜레이와 대기 시간을 끄고 초고속 출력 (GIF/CI용) | - |
+| `--seed <N>` | 출력 시나리오를 결정론적으로 고정하는 PRNG 시드값 | 무작위 |
+| `-h, --help` | 도움말 출력 | - |
+| `-v, --version` | 버전 정보 출력 | - |
+
+---
+
+## 로컬 개발 및 기여 가이드
+
+### 1. 프로젝트 빌드 및 실행
 
 ```bash
 git clone https://github.com/partrita/imposter-cli.git
 cd imposter-cli
 
-cargo run                          # 일반 실행
-cargo run -- --fast --duration 1   # 1분, 애니메이션 없이
-cargo run -- --style classic --seed 7   # classic 스타일, 재현 가능
+# 일반 실행
+cargo run
+
+# 1분 동안 애니메이션 없이 실행
+cargo run -- --fast --duration 1
+
+# OpenCode 스타일로 실행
+cargo run -- --style opencode
 ```
 
-`cargo run`은 첫 빌드에 10~20초, 이후에는 1~2초입니다. 코어는 의존성이 0개이고,
-TUI를 빼면 더 빨리 빌드됩니다:
+### 2. 코드 품질 검사
 
 ```bash
-timeout 5 cargo run --no-default-features -- --fast   # 5초만 실행
-```
-
-### 2. 코드 품질 확인
-
-```bash
-cargo fmt
-cargo fmt -- --check
+cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-현재 테스트는 5개(RNG 결정성·범위, 줄바꿈, 토큰 표기, CLI 기본값)로 1초 안에 끝납니다.
-
-### 3. 릴리스 빌드 + 리소스 측정
+### 3. 릴리스 빌드 및 리소스 점유율 측정
 
 ```bash
 cargo build --release
 ls -lh target/release/imposter           # 약 558 KB (TUI 포함)
 
 cargo build --release --no-default-features
-ls -lh target/release/imposter           # 약 377 KB (TUI 제외, 의존성 0개)
+ls -lh target/release/imposter           # 약 377 KB (TUI 제외)
 
-# macOS
-timeout 2 /usr/bin/time -l ./target/release/imposter --fast >/dev/null
-# Linux
-timeout 2 /usr/bin/time -v ./target/release/imposter --fast >/dev/null
-```
-
-`maximum resident set size` 값을 보면 됩니다. 로컬 측정값은 1.9~2.2 MB입니다.
-
-### 4. 바이너리가 작은지 확인
-
-```bash
-cargo tree --no-default-features   # 비어 있어야 정상: imposter v0.1.0
-cargo tree                        # 기본 빌드는 ratatui/crossterm만 추가
-cargo bloat --release      # (선택) cargo install cargo-bloat
-```
-
-`Cargo.toml`의 `[profile.release]`를 건드리면 크기가 바로 커집니다.
-`opt-level = "z"`, `lto`, `panic = "abort"`, `strip`을 유지하세요.
-
-### 5. 코드 구조
-
-| 파일 | 역할 | 대략적인 크기 |
-| --- | --- | --- |
-| `src/main.rs` | 진입점, 스타일 분기, deadline | 70줄 |
-| `src/cli.rs` | 직접 만든 인자 파서 + `--help` | 170줄 |
-| `src/ansi.rs` | ANSI 색, 폭 계산, 스피너, wrap | 150줄 |
-| `src/transcript.rs` | 트랜스크립트 엔진 (페이싱·턴 구성·덱) | 200줄 |
-| `src/style/mod.rs` | `Style`/`Skin` 정의, `Renderer` 트레이트, 공용 헬퍼 | 530줄 |
-| `src/style/claude.rs` | Claude Code v2.1 (기준 레이아웃) | 35줄 |
-| `src/style/codex.rs` | OpenAI Codex (`codex-rs`) 레이아웃 오버라이드 | 235줄 |
-| `src/style/opencode.rs` | OpenCode TUI 레이아웃 오버라이드 | 265줄 |
-| `src/style/pi.rs` | Pi (`pi-coding-agent`) 레이아웃 오버라이드 | 280줄 |
-| `src/style/antigravity.rs` | Google Antigravity CLI (`agy`) 레이아웃 오버라이드 | 380줄 |
-| `src/tui.rs` | ratatui 설정 화면 + 실시간 스타일 프리뷰 (선택 기능) | 620줄 |
-| `src/classic.rs` | 예전 시스템 로그 스타일 | 260줄 |
-| `src/jargon.rs` | jargon 레벨별 대사 | 60줄 |
-| `src/content.rs` | 대사/프롬프트/디프 데이터 | 480줄 |
-| `src/config.rs` | `key = value` 설정 파일 | 130줄 |
-| `src/setup.rs` | `-i` 질문 흐름 | 85줄 |
-| `src/rng.rs` | xorshift64\* PRNG | 75줄 |
-| `src/types.rs` | 개발유형/난이도 enum | 120줄 |
-
-새 화면을 넣고 싶으면 `src/transcript.rs`의 `run()` 루프에 블록을 추가하면 됩니다.
-새 스타일은 세 단계면 됩니다.
-
-1. `src/style/mod.rs`의 `Style`에 variant 추가 (`ALL`, `as_str`, `parse`, `renderer`)
-2. `src/style/<이름>.rs`에 `Skin` 상수와 `impl Renderer` 작성
-3. `src/style/mod.rs`에 `pub mod <이름>;` 추가
-
-`Renderer`의 모든 메서드에는 기본 구현이 있으므로 `skin()`만 정의해도 동작합니다.
-그 다음 `welcome`, `prompt`, `tool`, `footer`처럼 실제로 다른 부분만 하나씩
-오버라이드하면 됩니다. 기준 레이아웃인 Claude는 `skin()`만 정의하고, Codex·opencode·Pi·Antigravity는
-각자의 실제 CLI 레이아웃에 맞춰 훅을 오버라이드합니다.
-새 대사는 `src/content.rs`에 상수로 추가하면 `Deck`이 자동으로 섞어서 소진합니다.
-컴파일 타임에 정적으로 들어가서 런타임 비용이 없습니다.
-
-### 6. 동작 확인 팁
-
-```bash
-# 색이 없는 파이프 출력 확인
-./target/release/imposter --fast | cat -v | head
-
-# 애니메이션 확인 (TTY 필요)
-./target/release/imposter --duration 1
-
-# 특정 시드로 항상 같은 출력
-./target/release/imposter --classic --fast --seed 1 | md5
-
-# 스타일별 출력 비교
-for s in claude codex opencode pi antigravity; do
-  ./target/release/imposter --fast --seed 1 -s "$s" | head -5
-done
+# 최대 메모리 점유율(RSS) 측정 (macOS 기준 약 1.9~2.2 MB)
+/usr/bin/time -l ./target/release/imposter --fast >/dev/null
 ```
 
 ---
 
-## crates.io 자동 배포 (GitHub Actions)
+## 크레딧 및 원작 안내
 
-워크플로: `.github/workflows/publish.yml`
+이 프로젝트는 **[@giacomo-b](https://github.com/giacomo-b)** 님의 **[`giacomo-b/rust-stakeholder`](https://github.com/giacomo-b/rust-stakeholder)** (MIT License)를 기반으로 발전되었습니다.
 
-### 최초 1회 설정
+"터미널 화면을 바쁘게 움직여 일하는 것처럼 보이게 한다"는 기발하고 유쾌한 아이디어와 기본 구성의 출처는 모두 원작자에게 있습니다. 멋진 프로젝트를 오픈소스로 공개해 주신 원작자께 깊은 감사를 드립니다.
 
-1. crates.io → **Account Settings → API Tokens → New Token**에서 토큰 발급
-   (scope: `publish-new`, `publish-update`)
-2. GitHub 저장소 → **Settings → Secrets and variables → Actions → New repository secret**
-   - 이름: `CARGO_REGISTRY_TOKEN`
-   - 값: 위에서 발급한 토큰
-3. (선택) **Settings → Environments**에 `crates.io` 환경을 만들고
-   required reviewers나 tag 제한을 걸면 토큰 오용을 막을 수 있습니다.
-
-### 배포 절차
-
-```bash
-# 1. 버전 올리기
-#    Cargo.toml 의 version = "0.1.1"
-
-# 2. 커밋
-git commit -am "release v0.1.1"
-
-# 3. 태그 푸시 (이 순간 워크플로가 실행됨)
-git tag v0.1.1
-git push origin main --tags
-```
-
-Actions가 자동으로:
-
-1. 태그(`v0.1.1`)와 `Cargo.toml` 버전이 같은지 확인
-2. `cargo test --locked`
-3. `cargo package --locked`
-4. `cargo publish --locked`
-
-이미 crates.io에 같은 버전이 있으면 실패하지 않고 건너뜁니다.
-
-### 수동 실행 (dry-run)
-
-Actions 탭 → **publish** → **Run workflow** → `dry_run` 체크된 상태로 실행하면
-실제 배포 없이 `cargo publish --dry-run`까지만 확인합니다.
-체크를 해제하면 수동으로 실제 배포합니다.
-
-### 멀티 플랫폼 바이너리
-
-워크플로: `.github/workflows/release.yml`
-
-같은 `v*` 태그에서 아래 5개 타깃을 빌드해 GitHub Release에 올립니다.
-
-| 러너 | 타깃 |
-| --- | --- |
-| `ubuntu-latest` | `x86_64-unknown-linux-gnu` |
-| `ubuntu-24.04-arm` | `aarch64-unknown-linux-gnu` |
-| `macos-latest` | `aarch64-apple-darwin` |
-| `macos-latest` | `x86_64-apple-darwin` |
-| `windows-latest` | `x86_64-pc-windows-msvc` |
-
-- 압축 파일과 `SHA256SUMS.txt`가 릴리스에 첨부됩니다.
-- 태그와 `Cargo.toml` 버전이 다르면 빌드 전에 실패합니다.
-- `publish.yml`(crates.io)과 `release.yml`(바이너리)은 같은 태그에서 각자 실행됩니다.
-
-### 테스트 CI
-
-워크플로: `.github/workflows/ci.yml`
-
-`main` push와 PR마다 Ubuntu · macOS · Windows에서 `fmt`(Linux만) · `clippy`
-· `test` · `--no-default-features` 빌드 · 1초 스모크 실행을 돌립니다.
+`imposter` 포크에서는 현대적인 AI 에이전트 CLI 스타일 5종 추가, 224개 외부 의존성의 완전 제거(코어 0개), 300KB대 초경량화, 다크/라이트 테마 체계, 대화형 라이브 프리뷰 TUI 및 자동 배포 파이프라인 구축을 새롭게 수행했습니다.
 
 ---
-
-## 크레딧
-
-이 프로젝트의 **원작자는 [@giacomo-b](https://github.com/giacomo-b)** 입니다.
-원본은 [giacomo-b/rust-stakeholder](https://github.com/giacomo-b/rust-stakeholder) (MIT)이고,
-"터미널을 바쁘게 보이게 해서 일하는 척한다"는 아이디어, 농담, 기능 구성은 전부 그쪽에서 나왔습니다.
-
-**원본 코드를 MIT 라이선스로 공개해 주셔서 감사합니다.** 덕분에 이 프로젝트를 만들고,
-이름을 바꾸고, Claude Code 스타일 화면으로 다시 쓸 수 있었습니다.
-
-이 저장소(`imposter`)에서 바뀐 부분은 이름, 화면 렌더러, 의존성 제거(224개 → 0개),
-crates.io 배포 워크플로뿐입니다. 재미있는 아이디어의 출처는 원작에 있습니다.
 
 ## 라이선스
 
-MIT. `LICENSE` 참고. 원본 저작권(`Copyright (c) 2025 giacomo-b`)도 `LICENSE`에 함께 남겨 두었습니다.
-
-## 면책
-
-이 도구는 풍자입니다. 화면에 뜨는 파일, 테스트 결과, PR 승인은 전부 가짜입니다.
-성과 보고에 쓰지 마세요. 실제로 코드를 짜는 척하다가 실제로 코드를 짜게 되는 일은 없습니다.
-
----
-
-<sub>English: `imposter` is a zero-dependency, ~345 KB Rust CLI that prints a fake Claude Code session so your terminal looks busy. It never touches the filesystem, spawns no threads, and uses ~2 MB of RAM. Satire only. `cargo install imposter`.</sub>
+본 프로젝트는 **MIT 라이선스**에 따라 배포됩니다. 자세한 내용은 [`LICENSE`](LICENSE) 파일을 참고해 주세요.
