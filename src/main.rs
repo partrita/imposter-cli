@@ -4,6 +4,7 @@ use console::Term;
 use rand::prelude::*;
 use rand::rng;
 use std::{
+    env,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -16,6 +17,7 @@ mod activities;
 mod config;
 mod display;
 mod generators;
+mod tui;
 mod types;
 use types::{Complexity, DevelopmentType, JargonLevel};
 
@@ -58,20 +60,74 @@ struct Args {
     /// Simulate a specific framework usage
     #[arg(short = 'F', long, default_value = "")]
     framework: String,
+
+    /// Open interactive TUI setup wizard
+    #[arg(short = 'i', long, default_value_t = false)]
+    interactive: bool,
 }
 
 fn main() {
+    let raw_args: Vec<String> = env::args().collect();
+    let has_explicit_args = raw_args.len() > 1;
+
     let args = Args::parse();
 
-    let config = config::SessionConfig {
-        dev_type: args.dev_type,
-        jargon_level: args.jargon,
-        complexity: args.complexity,
-        alerts_enabled: args.alerts,
-        project_name: args.project,
-        minimal_output: args.minimal,
-        team_activity: args.team,
-        framework: args.framework,
+    // Determine whether to run interactive TUI:
+    // Run TUI if user explicitly passed -i/--interactive OR if run without any CLI arguments
+    let run_tui = args.interactive || !has_explicit_args;
+
+    let (config, duration) = if run_tui {
+        // Load saved config if exists, otherwise fallback to defaults or CLI args
+        let base_config = config::SessionConfig::load_saved().unwrap_or_else(|| config::SessionConfig {
+            dev_type: args.dev_type,
+            jargon_level: args.jargon,
+            complexity: args.complexity,
+            alerts_enabled: args.alerts,
+            project_name: args.project.clone(),
+            minimal_output: args.minimal,
+            team_activity: args.team,
+            framework: args.framework.clone(),
+        });
+
+        let app = tui::TuiApp::new(base_config, args.duration);
+        match app.run_setup() {
+            Ok(Some((cfg, dur))) => (cfg, dur),
+            Ok(None) => {
+                // User cancelled / exited setup
+                println!("{}", "Setup cancelled.".yellow());
+                return;
+            }
+            Err(e) => {
+                eprintln!("Failed to launch TUI: {}. Falling back to CLI mode.", e);
+                (
+                    config::SessionConfig {
+                        dev_type: args.dev_type,
+                        jargon_level: args.jargon,
+                        complexity: args.complexity,
+                        alerts_enabled: args.alerts,
+                        project_name: args.project,
+                        minimal_output: args.minimal,
+                        team_activity: args.team,
+                        framework: args.framework,
+                    },
+                    args.duration,
+                )
+            }
+        }
+    } else {
+        (
+            config::SessionConfig {
+                dev_type: args.dev_type,
+                jargon_level: args.jargon,
+                complexity: args.complexity,
+                alerts_enabled: args.alerts,
+                project_name: args.project,
+                minimal_output: args.minimal,
+                team_activity: args.team,
+                framework: args.framework,
+            },
+            args.duration,
+        )
     };
 
     let running = Arc::new(AtomicBool::new(true));
@@ -89,8 +145,8 @@ fn main() {
     display::display_boot_sequence(&config);
 
     let start_time = Instant::now();
-    let target_duration = if args.duration > 0 {
-        Some(Duration::from_secs(args.duration))
+    let target_duration = if duration > 0 {
+        Some(Duration::from_secs(duration))
     } else {
         None
     };
