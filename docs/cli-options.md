@@ -1,28 +1,84 @@
-# CLI 옵션 레퍼런스
+# CLI 명령어 및 옵션 상세 안내
 
-`imposter`의 모든 커맨드라인 플래그와 옵션입니다.
+`imposter`는 별도의 무거운 인자 파서 크레이트(`clap` 등)에 의존하지 않고, 직접 작성한 순수 파서를 통해 가볍고 빠른 CLI 인터페이스를 제공합니다.
+
+---
+
+## 1. 전체 사용법 문법
 
 ```text
-Usage: imposter [OPTIONS]
-
-Options:
-  -s, --style <NAME>        Visual persona: claude, codex, opencode, pi, antigravity, classic
-      --claude              Alias for --style claude
-      --classic             Alias for --style classic
-  -t, --theme <MODE>        Color theme: dark, light
-      --dark                Alias for --theme dark
-      --light               Alias for --theme light
-  -d, --dev-type <TYPE>     Target codebase persona: backend, frontend, fullstack,
-                            data-science, devops, blockchain, machine-learning,
-                            systems, game-dev, security
-  -T, --duration <MINUTES>  Auto-stop timer in minutes (0 = forever, default 0)
-  -a, --alerts              Simulate occasional compiler/lint errors and auto-fixes
-  -j, --jargon <LEVEL>      Jargon intensity: low, medium, high, extreme
-  -c, --complexity <LEVEL>  Turn complexity & plans: low, medium, high, extreme
-  -i, --interactive         Launch the interactive configuration setup
-      --save                Save current arguments as defaults to config.toml
-      --fast                Disable character typing delays and pacing (for GIF/CI)
-      --seed <N>            Fixed PRNG seed for deterministic output
-  -h, --help                Print help information
-  -v, --version             Print version
+imposter [OPTIONS]
 ```
+
+---
+
+## 2. 옵션별 상세 설명
+
+### `-s, --style <NAME>`
+시각적 스타일(에이전트 페르소나)을 지정합니다.
+- **선택 가능한 값**: `claude`, `codex`, `opencode`, `pi`, `antigravity`, `classic`
+- **기본값**: `claude`
+- **별칭 지원**:
+  - `--claude`: `--style claude`의 축약 플래그
+  - `--classic`: `--style classic`의 축약 플래그
+  - 인자값으로 `agy`나 `cc`, `oc` 같은 약칭도 인식합니다.
+
+### `-t, --theme <MODE>`
+색상 테마를 전환합니다.
+- **선택 가능한 값**: `dark`, `light`
+- **기본값**: `dark`
+- **별칭 지원**: `--dark`, `--light`
+- 다크 모드는 어두운 배경에 최적화된 24비트 색상을 사용하며, 라이트 모드는 흰색 또는 밝은 회색 터미널 배경에서 글자가 선명히 보이도록 고대비 전경색과 파스텔 배경색으로 자동 보정합니다.
+
+### `-d, --dev-type <TYPE>`
+모사할 대상 코드베이스의 기술 스택 및 개발 분야를 선택합니다. 선택된 분야에 따라 탐색하는 파일명, 임포트 경로, 디프 내용이 달라집니다.
+- **선택 가능한 값**:
+  - `backend`: 분산 시스템, 데이터베이스 풀, gRPC 핸들러 등
+  - `frontend`: React, TypeScript 컴포넌트, 상태 훅, CSS 모듈 등
+  - `fullstack`: API 라우트, 클라이언트 번들, 통합 테스트 등
+  - `data-science`: 데이터 파이프라인, 전처리 스크립트, 피처 엔지니어링 등
+  - `devops`: Kubernetes 매니페스트, Terraform, Dockerfile 등
+  - `blockchain`: 스마트 컨트랙트, 가스비 최적화 등
+  - `machine-learning`: 모델 추론 파이프라인, 텐서 처리 등
+  - `systems`: 시스템 프로그래밍, 메모리 관리, 운영체제 저수준 API 등
+  - `game-dev`: 렌더링 루프, 물리 엔진, 엔티티 컴포넌트 시스템 등
+  - `security`: 취약점 점검, 암호화 알고리즘, 인증 토큰 핸들러 등
+- **기본값**: `backend`
+
+### `-T, --duration <MINUTES>`
+작업 세션 자동 종료 타이머를 분(Minute) 단위로 설정합니다.
+- **범위**: `0` ~ `999`
+- **기본값**: `0` (무한 반복, `Ctrl+C` 입력 시까지 계속 진행)
+- `imposter --duration 10`과 같이 지정하면 10분이 지난 뒤 현재 턴을 깔끔하게 마무리하고 정상 종료합니다.
+
+### `-a, --alerts`
+주기적으로 컴파일러 경고나 린트 에러(`cargo clippy` 실패)가 발생하는 시나리오를 활성화합니다.
+- 에러가 발생한 뒤 에이전트가 "원인을 분석하고 자동으로 코드를 수정하는 패치 디프"를 만들어 자체 수습하는 극적인 장면이 연출됩니다.
+- 기본값은 비활성화 상태입니다.
+
+### `-j, --jargon <LEVEL>`
+생성되는 기술 전문 용어의 난이도를 설정합니다.
+- **선택 가능한 값**: `low`, `medium`, `high`, `extreme`
+- **기본값**: `medium`
+- 주로 `classic` 스타일의 시스템 로그나 각 에이전트의 커밋 메시지, 상태 요약에 반영됩니다.
+
+### `-c, --complexity <LEVEL>`
+턴의 전개 깊이와 복잡도를 조절합니다.
+- **선택 가능한 값**: `low`, `medium`, `high`, `extreme`
+- **기본값**: `medium`
+- `low`로 설정하면 Todo나 서브에이전트 블록이 생략되어 조용하고 빠른 단발성 턴이 진행되며, `high`나 `extreme`으로 높이면 상세한 계획 수립, 체크리스트, 서브에이전트 협업 로그가 턴마다 깊이 있게 추가됩니다.
+
+### `-i, --interactive`
+`ratatui` 기반의 대화형 설정 창을 엽니다. 설정 파일이 없는 최초 실행 시에도 자동으로 이 모드가 실행됩니다. (비-TTY 환경에서는 텍스트 문답 모드로 대체)
+
+### `--save`
+현재 커맨드라인에서 전달한 인자값들을 기본값으로 설정 파일(`~/.config/imposter/config.toml`)에 즉시 저장합니다.
+
+### `--fast`
+글자 타이핑 딜레이와 프레임 대기 시간을 모두 제거하여 초고속으로 출력합니다. 터미널 녹화(GIF/SVG), 스크린샷 캡처 또는 CI 파이프라인에서 빠른 검증을 수행할 때 유용합니다.
+
+### `--seed <N>`
+의사 난수 생성기의 시드(Seed) 값을 정수로 고정합니다. 동일한 시드를 주면 언제 실행하더라도 항상 동일한 순서로 파일, 프롬프트, 도구 출력이 재현됩니다.
+
+### `-h, --help` / `-v, --version`
+도움말 및 현재 설치된 바이너리의 버전 정보를 출력합니다.
