@@ -53,6 +53,11 @@ pub fn run(ui: &mut Ui, cfg: &Config, args: &Args, rng: &mut Rng, deadline: Opti
         if args.alerts && rng.chance(1, 3) {
             alert(ui, rng);
         }
+
+        if rng.chance(2, 5) {
+            task_event(ui, rng, &mut services, speed_factor);
+        }
+
         ui.blank();
         ui.flush();
         pacing_pause(ui, 600, speed_factor, rng);
@@ -75,50 +80,75 @@ fn boot(ui: &mut Ui, cfg: &Config) {
     ui.blank();
 
     let width = 24;
-    for pct in [18u32, 41, 67, 88, 100] {
+    if !ui.animate {
+        let pct = 100u32;
+        let bar = "\u{2588}".repeat(width);
+        ui.parts(&[
+            (ansi::GREEN, &bar),
+            (ansi::DIM, " 100%"),
+            ("", &format!("  {}", boot_label(pct))),
+        ]);
+        ui.blank();
+        return;
+    }
+
+    for pct in 1..=100u32 {
         let filled = (pct as usize * width) / 100;
         let bar = format!(
             "{}{}",
             "\u{2588}".repeat(filled),
             "\u{2591}".repeat(width - filled)
         );
-        ui.parts(&[
+        ui.write_raw("\r\x1b[2K");
+        ui.parts_inline(&[
             (ansi::GREEN, &bar),
             (ansi::DIM, &format!(" {pct:>3}%")),
             ("", &format!("  {}", boot_label(pct))),
         ]);
-        ui.pause(110);
+        ui.flush();
+        let pause_ms = match pct {
+            18 | 41 | 67 | 88 => 70,
+            99 => 80,
+            _ => 12,
+        };
+        ui.pause(pause_ms);
     }
+    ui.nl();
     ui.blank();
 }
 
 fn boot_label(pct: u32) -> &'static str {
     match pct {
-        18 => "resolving modules",
-        41 => "warming caches",
-        67 => "linking artifacts",
-        88 => "checking invariants",
+        0..=24 => "resolving modules",
+        25..=50 => "warming caches",
+        51..=75 => "linking artifacts",
+        76..=95 => "checking invariants",
         _ => "ready",
     }
 }
 
 fn header(ui: &mut Ui, name: &str) {
     ui.parts(&[(ansi::ACCENT, "\u{25b8} "), (ansi::BOLD, name)]);
+    ui.flush();
+    ui.pause(60);
 }
 
 fn ok(ui: &mut Ui, text: &str) {
     ui.parts(&[(ansi::GREEN, "  \u{2713} "), ("", text)]);
+    ui.flush();
     ui.pause(55);
 }
 
 fn warn(ui: &mut Ui, text: &str) {
     ui.parts(&[(ansi::YELLOW, "  ! "), ("", text)]);
+    ui.flush();
     ui.pause(55);
 }
 
 fn info(ui: &mut Ui, text: &str) {
     ui.parts(&[(ansi::DIM, "  \u{00b7} "), (ansi::DIM, text)]);
-    ui.pause(40);
+    ui.flush();
+    ui.pause(45);
 }
 
 fn analyze(ui: &mut Ui, rng: &mut Rng, services: &mut Deck<&'static str>, budget: usize) {
@@ -238,4 +268,221 @@ fn alert(ui: &mut Ui, rng: &mut Rng) {
     ]);
     ui.pause(120);
     info(ui, "auto-remediation: scaled pool 20 -> 32");
+}
+
+fn task_event(ui: &mut Ui, rng: &mut Rng, services: &mut Deck<&'static str>, speed_factor: f32) {
+    ui.blank();
+    match rng.range(0, 4) {
+        0 => task_progress_bar(ui, rng, services, speed_factor),
+        1 => task_counter_stream(ui, rng, services, speed_factor),
+        2 => task_multi_step_pipeline(ui, rng, services, speed_factor),
+        _ => task_spinner_job(ui, rng, services, speed_factor),
+    }
+}
+
+fn task_progress_bar(
+    ui: &mut Ui,
+    rng: &mut Rng,
+    services: &mut Deck<&'static str>,
+    speed_factor: f32,
+) {
+    let service = services.next(rng);
+    let heavy = rng.chance(1, 3);
+    let task_name = if heavy {
+        format!("optimizing AST & generating binaries for {service}")
+    } else {
+        format!("compiling {service} crate artifacts")
+    };
+
+    let total_secs = if heavy {
+        rng.range(20, 42) as f32 / 10.0
+    } else {
+        rng.range(5, 14) as f32 / 10.0
+    };
+
+    if !ui.animate {
+        ok(ui, &format!("{task_name} completed in {total_secs:.1}s"));
+        return;
+    }
+
+    let width = 24;
+    let mut pct = 0u32;
+    let base_sleep = ((total_secs * 1000.0 * speed_factor) / 35.0).max(10.0) as u64;
+
+    while pct < 100 {
+        let step = rng.range(2, if heavy { 6 } else { 12 }) as u32;
+        pct = (pct + step).min(100);
+        let filled = (pct as usize * width) / 100;
+        let bar = format!(
+            "{}{}",
+            "\u{2588}".repeat(filled),
+            "\u{2591}".repeat(width - filled)
+        );
+
+        ui.write_raw("\r\x1b[2K");
+        ui.parts_inline(&[
+            (ansi::ACCENT, "  ["),
+            (ansi::GREEN, &bar),
+            (ansi::ACCENT, "]"),
+            (ansi::DIM, &format!(" {pct:>3}% ")),
+            ("", &task_name),
+        ]);
+        ui.flush();
+
+        let sleep = if rng.chance(1, 7) {
+            base_sleep * 3
+        } else {
+            base_sleep
+        };
+        ui.pause(sleep);
+    }
+
+    ui.write_raw("\r\x1b[2K");
+    ok(ui, &format!("{task_name} completed in {total_secs:.1}s"));
+}
+
+fn task_counter_stream(
+    ui: &mut Ui,
+    rng: &mut Rng,
+    services: &mut Deck<&'static str>,
+    speed_factor: f32,
+) {
+    let service = services.next(rng);
+    let is_mb = rng.chance(1, 2);
+    let target = if is_mb {
+        rng.range(32, 180) as u32
+    } else {
+        rng.range(48, 260) as u32
+    };
+    let unit = if is_mb { "MB" } else { "chunks" };
+    let task_name = format!("streaming payload to {service}");
+    let total_secs = (rng.range(8, 20) as f32 / 10.0) * speed_factor;
+
+    if !ui.animate {
+        ok(
+            ui,
+            &format!("{task_name} ({target}/{target} {unit}) finished"),
+        );
+        return;
+    }
+
+    let mut current = 0u32;
+    let step_time = ((total_secs * 1000.0) / 25.0).max(12.0) as u64;
+
+    while current < target {
+        let inc = rng.range(2, (target / 8).max(3) as u64) as u32;
+        current = (current + inc).min(target);
+
+        ui.write_raw("\r\x1b[2K");
+        ui.parts_inline(&[
+            (ansi::ACCENT, "  \u{21c4} "),
+            (ansi::DIM, &format!("[{current:>3}/{target} {unit}] ")),
+            ("", &task_name),
+        ]);
+        ui.flush();
+        ui.pause(step_time);
+    }
+
+    ui.write_raw("\r\x1b[2K");
+    ok(
+        ui,
+        &format!("{task_name} ({target}/{target} {unit}) finished in {total_secs:.1}s"),
+    );
+}
+
+fn task_spinner_job(
+    ui: &mut Ui,
+    rng: &mut Rng,
+    services: &mut Deck<&'static str>,
+    speed_factor: f32,
+) {
+    let service = services.next(rng);
+    let jobs = [
+        format!("acquiring cluster write lock for {service}"),
+        format!("verifying schema checksums across nodes in {service}"),
+        format!("rebuilding bloom filters for {service}"),
+        format!("pruning stale snapshot entries in {service}"),
+    ];
+    let job_name = &jobs[rng.below(jobs.len())];
+    let elapsed = rng.range(6, 18) as f32 / 10.0;
+
+    if !ui.animate {
+        ok(ui, &format!("{job_name} ({elapsed:.1}s)"));
+        return;
+    }
+
+    let frames = [
+        "\u{280b}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283c}", "\u{2834}", "\u{2826}",
+        "\u{2827}", "\u{2807}", "\u{280f}",
+    ];
+    let ticks = ((elapsed * 1000.0 * speed_factor) / 70.0).max(8.0) as usize;
+
+    for i in 0..ticks {
+        let frame = frames[i % frames.len()];
+        ui.write_raw("\r\x1b[2K");
+        ui.parts_inline(&[
+            (ansi::ACCENT, &format!("  {frame} ")),
+            (ansi::DIM, job_name),
+            (ansi::DIM, " \u{2026}"),
+        ]);
+        ui.flush();
+        ui.pause(70);
+    }
+
+    ui.write_raw("\r\x1b[2K");
+    ok(ui, &format!("{job_name} ({elapsed:.1}s)"));
+}
+
+fn task_multi_step_pipeline(
+    ui: &mut Ui,
+    rng: &mut Rng,
+    services: &mut Deck<&'static str>,
+    speed_factor: f32,
+) {
+    let service = services.next(rng);
+    let pipeline = [
+        (
+            "fetching upstream dependencies",
+            rng.range(3, 8) as f32 / 10.0,
+        ),
+        ("linking native extensions", rng.range(5, 12) as f32 / 10.0),
+        ("deploying worker revisions", rng.range(4, 9) as f32 / 10.0),
+    ];
+
+    header(ui, &format!("pipeline: release sync for {service}"));
+    let frames = [
+        "\u{280b}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283c}", "\u{2834}",
+    ];
+
+    for (step_idx, (name, duration)) in pipeline.iter().enumerate() {
+        let step_num = step_idx + 1;
+        let prefix = format!("  [{step_num}/3] ");
+        if !ui.animate {
+            ok(ui, &format!("[{step_num}/3] {name}"));
+            continue;
+        }
+
+        let ticks = ((*duration * 1000.0 * speed_factor) / 60.0).max(6.0) as usize;
+        for i in 0..ticks {
+            let frame = frames[i % frames.len()];
+            ui.write_raw("\r\x1b[2K");
+            ui.parts_inline(&[
+                (ansi::ACCENT, &prefix),
+                (ansi::YELLOW, &format!("{frame} ")),
+                (ansi::DIM, name),
+            ]);
+            ui.flush();
+            ui.pause(60);
+        }
+
+        ui.write_raw("\r\x1b[2K");
+        ui.parts(&[
+            (ansi::ACCENT, &prefix),
+            (ansi::GREEN, "\u{2713} "),
+            ("", name),
+            (ansi::DIM, &format!(" ({duration:.1}s)")),
+        ]);
+        ui.flush();
+        ui.pause(40);
+    }
 }

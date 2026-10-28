@@ -164,6 +164,15 @@ impl Ui {
     }
 
     pub fn parts(&mut self, parts: &[(&'static str, &str)]) {
+        self.parts_inner(parts, true);
+    }
+
+    /// Renders parts inline without a trailing newline. Useful for progress bars.
+    pub fn parts_inline(&mut self, parts: &[(&'static str, &str)]) {
+        self.parts_inner(parts, false);
+    }
+
+    fn parts_inner(&mut self, parts: &[(&'static str, &str)], newline: bool) {
         let color = self.color;
         let theme = self.theme;
         let line = &mut self.line;
@@ -186,7 +195,9 @@ impl Ui {
         if color && !current.is_empty() {
             line.push_str(RESET);
         }
-        line.push('\n');
+        if newline {
+            line.push('\n');
+        }
 
         if self.out.write_all(line.as_bytes()).is_err() {
             // Reader went away (e.g. `imposter | head`). Exit instead of
