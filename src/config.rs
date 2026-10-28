@@ -1,6 +1,6 @@
 use crate::cli::Args;
 use crate::style::Style;
-use crate::types::{Complexity, DevelopmentType, JargonLevel, Theme};
+use crate::types::{Complexity, DevelopmentType, JargonLevel, Speed, Theme};
 use std::fs;
 use std::path::PathBuf;
 
@@ -13,6 +13,8 @@ pub struct Config {
     pub complexity: Complexity,
     pub duration: u64,
     pub alerts: bool,
+    pub speed: Speed,
+    pub model: Option<String>,
 }
 
 impl Default for Config {
@@ -25,6 +27,8 @@ impl Default for Config {
             complexity: Complexity::Medium,
             duration: 0,
             alerts: false,
+            speed: Speed::Normal,
+            model: None,
         }
     }
 }
@@ -39,6 +43,8 @@ impl Config {
             complexity: a.complexity,
             duration: a.duration,
             alerts: a.alerts,
+            speed: a.speed,
+            model: a.model.clone(),
         }
     }
 
@@ -80,6 +86,13 @@ impl Config {
                         .unwrap_or(cfg.duration);
                 }
                 "alerts" => cfg.alerts = value == "true",
+                "speed" => cfg.speed = Speed::parse(value).unwrap_or(cfg.speed),
+                "model" => {
+                    let m = value.trim();
+                    if !m.is_empty() {
+                        cfg.model = Some(m.to_string());
+                    }
+                }
                 _ => {}
             }
         }
@@ -93,6 +106,10 @@ impl Config {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
+        let model_line = match &self.model {
+            Some(m) if !m.trim().is_empty() => format!("model = \"{}\"\n", m.trim()),
+            _ => String::new(),
+        };
         let body = format!(
             "# imposter settings\n\
              style = {}\n\
@@ -101,7 +118,9 @@ impl Config {
              jargon = {}\n\
              complexity = {}\n\
              duration = {}\n\
-             alerts = {}\n",
+             alerts = {}\n\
+             speed = {}\n\
+             {}",
             self.style.as_str(),
             self.theme.as_str(),
             self.dev_type.as_str(),
@@ -109,6 +128,8 @@ impl Config {
             self.complexity.as_str(),
             self.duration,
             self.alerts,
+            self.speed.as_str(),
+            model_line,
         );
         fs::write(&path, body)?;
         Ok(path)

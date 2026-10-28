@@ -17,12 +17,25 @@ const SERVICES: &[&str] = &[
     "media-pipeline",
 ];
 
+fn pacing_pause(ui: &mut Ui, base_ms: u64, speed_factor: f32, rng: &mut Rng) {
+    let scaled = (base_ms as f32 * speed_factor) as u64;
+    let jitter_range = (scaled as f32 * 0.3).round() as i64;
+    let jitter = if jitter_range > 0 {
+        rng.range((-jitter_range) as u64, jitter_range as u64) as i64 - jitter_range
+    } else {
+        0
+    };
+    let final_ms = ((scaled as i64 + jitter).max(15)) as u64;
+    ui.pause(final_ms);
+}
+
 pub fn run(ui: &mut Ui, cfg: &Config, args: &Args, rng: &mut Rng, deadline: Option<Instant>) {
     boot(ui, cfg);
     let budget = jargon::line_budget(cfg.complexity);
     let mut insights = Deck::new(jargon::lines(cfg.jargon), rng);
     let mut services = Deck::new(SERVICES, rng);
     let mut step = 0u32;
+    let speed_factor = cfg.speed.delay_factor();
 
     while !crate::expired(deadline) {
         step += 1;
@@ -35,14 +48,14 @@ pub fn run(ui: &mut Ui, cfg: &Config, args: &Args, rng: &mut Rng, deadline: Opti
         }
 
         ui.parts(&[(ansi::DIM, "  \u{203a} "), (ansi::DIM, insights.next(rng))]);
-        ui.pause(90);
+        pacing_pause(ui, 90, speed_factor, rng);
 
         if args.alerts && rng.chance(1, 3) {
             alert(ui, rng);
         }
         ui.blank();
         ui.flush();
-        ui.pause(600);
+        pacing_pause(ui, 600, speed_factor, rng);
     }
 
     ui.parts(&[(ansi::DIM, "session terminated.")]);

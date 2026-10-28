@@ -19,6 +19,7 @@ use crate::content;
 pub mod antigravity;
 pub mod claude;
 pub mod codex;
+pub mod hollywood;
 pub mod opencode;
 pub mod pi;
 
@@ -34,17 +35,19 @@ pub enum Style {
     Opencode,
     Pi,
     Antigravity,
+    Hollywood,
     Classic,
 }
 
 impl Style {
     #[allow(dead_code)] // used by the TUI
-    pub const ALL: [Style; 6] = [
+    pub const ALL: [Style; 7] = [
         Style::Claude,
         Style::Codex,
         Style::Opencode,
         Style::Pi,
         Style::Antigravity,
+        Style::Hollywood,
         Style::Classic,
     ];
 
@@ -56,6 +59,7 @@ impl Style {
             Style::Opencode => "opencode",
             Style::Pi => "pi",
             Style::Antigravity => "antigravity",
+            Style::Hollywood => "hollywood",
         }
     }
 
@@ -67,6 +71,7 @@ impl Style {
             "opencode" | "oc" => Some(Style::Opencode),
             "pi" | "pi-agent" => Some(Style::Pi),
             "antigravity" | "antigravity-cli" | "agy" => Some(Style::Antigravity),
+            "hollywood" | "hacker" | "hack" | "hw" => Some(Style::Hollywood),
             _ => None,
         }
     }
@@ -84,6 +89,7 @@ impl Style {
             Style::Opencode => &opencode::OPENCODE,
             Style::Pi => &pi::PI,
             Style::Antigravity => &antigravity::ANTIGRAVITY,
+            Style::Hollywood => &hollywood::HOLLYWOOD,
         }
     }
 }
@@ -109,6 +115,7 @@ pub struct Skin {
     pub hints: &'static [&'static str],
     pub thinking: &'static str,
     /// Provider label shown by opencode-style footers. Empty when unused.
+    #[allow(dead_code)]
     pub provider: &'static str,
     /// Startup command hints (Codex prints these under its header).
     pub commands: &'static [&'static str],
@@ -177,6 +184,20 @@ pub trait Renderer: Sync {
             } else {
                 ui.parts(&[(ansi::GRAY, "  "), ("", line)]);
             }
+        }
+    }
+
+    /// Renders the thought stream after the thinking spinner.
+    fn thought(&self, ui: &mut Ui, thought: &str) {
+        let lines = ansi::wrap(thought, ui.width.saturating_sub(6));
+        for (i, line) in lines.iter().enumerate() {
+            if i == 0 {
+                ui.write_styled(ansi::DIM, "  \u{23bf} ");
+            } else {
+                ui.write_raw("    ");
+            }
+            ui.type_text(line, 2);
+            ui.nl();
         }
     }
 

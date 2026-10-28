@@ -54,21 +54,21 @@ const LIGHT_PI_TOOL_ERR_BG: &str = "\x1b[48;2;250;226;226;38;2;153;27;27m";
 const LIGHT_PI_TOOL_ERR_TITLE: &str = "\x1b[48;2;250;226;226;1;38;2;164;14;38m";
 
 // OpenCode (`anomalyco/opencode`) `backgroundPanel` + `SplitBorder` tokens.
-pub const OC_PANEL_BG: &str = "\x1b[48;2;26;27;38;38;2;226;232;240m";
-pub const OC_PANEL_BOLD: &str = "\x1b[48;2;26;27;38;1;38;2;248;250;252m";
-pub const OC_PANEL_DIM: &str = "\x1b[48;2;26;27;38;38;2;122;132;156m";
-pub const OC_PANEL_BORDER: &str = "\x1b[48;2;26;27;38;38;2;72;79;106m";
-pub const OC_PANEL_ACCENT: &str = "\x1b[48;2;26;27;38;1;38;2;86;156;255m";
-pub const OC_PANEL_GREEN: &str = "\x1b[48;2;26;27;38;38;2;134;239;172m";
-pub const OC_PANEL_RED: &str = "\x1b[48;2;26;27;38;38;2;252;165;165m";
+pub const OC_PANEL_BG: &str = "\x1b[48;2;40;44;52;38;2;226;232;240m";
+pub const OC_PANEL_BOLD: &str = "\x1b[48;2;40;44;52;1;38;2;248;250;252m";
+pub const OC_PANEL_DIM: &str = "\x1b[48;2;40;44;52;38;2;138;148;172m";
+pub const OC_PANEL_BORDER: &str = "\x1b[48;2;40;44;52;38;2;86;94;122m";
+pub const OC_PANEL_ACCENT: &str = "\x1b[48;2;40;44;52;1;38;2;86;156;255m";
+pub const OC_PANEL_GREEN: &str = "\x1b[48;2;40;44;52;38;2;134;239;172m";
+pub const OC_PANEL_RED: &str = "\x1b[48;2;40;44;52;38;2;252;165;165m";
 
-const LIGHT_OC_PANEL_BG: &str = "\x1b[48;2;230;233;239;38;2;30;41;59m";
-const LIGHT_OC_PANEL_BOLD: &str = "\x1b[48;2;230;233;239;1;38;2;15;23;42m";
-const LIGHT_OC_PANEL_DIM: &str = "\x1b[48;2;230;233;239;38;2;100;116;139m";
-const LIGHT_OC_PANEL_BORDER: &str = "\x1b[48;2;230;233;239;38;2;148;163;184m";
-const LIGHT_OC_PANEL_ACCENT: &str = "\x1b[48;2;230;233;239;1;38;2;37;99;235m";
-const LIGHT_OC_PANEL_GREEN: &str = "\x1b[48;2;230;233;239;38;2;17;99;41m";
-const LIGHT_OC_PANEL_RED: &str = "\x1b[48;2;230;233;239;38;2;164;14;38m";
+const LIGHT_OC_PANEL_BG: &str = "\x1b[48;2;216;220;230;38;2;30;41;59m";
+const LIGHT_OC_PANEL_BOLD: &str = "\x1b[48;2;216;220;230;1;38;2;15;23;42m";
+const LIGHT_OC_PANEL_DIM: &str = "\x1b[48;2;216;220;230;38;2;90;105;125m";
+const LIGHT_OC_PANEL_BORDER: &str = "\x1b[48;2;216;220;230;38;2;140;155;175m";
+const LIGHT_OC_PANEL_ACCENT: &str = "\x1b[48;2;216;220;230;1;38;2;37;99;235m";
+const LIGHT_OC_PANEL_GREEN: &str = "\x1b[48;2;216;220;230;38;2;17;99;41m";
+const LIGHT_OC_PANEL_RED: &str = "\x1b[48;2;216;220;230;38;2;164;14;38m";
 
 /// Windows consoles need opt-in before they interpret ANSI escapes.
 /// Hand-rolled kernel32 calls keep the Windows build dependency-free; on every
@@ -102,13 +102,11 @@ pub fn enable_ansi() {
 pub fn enable_ansi() {}
 
 const CLEAR_LINE: &str = "\r\x1b[2K";
-const SPINNER_CLAUDE: [&str; 6] = [
-    "\u{00b7}", "\u{2722}", "\u{2733}", "\u{2736}", "\u{273b}", "\u{273d}",
-];
 const SPINNER_BRAILLE: [&str; 10] = [
     "\u{280b}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283c}", "\u{2834}", "\u{2826}", "\u{2827}",
     "\u{2807}", "\u{280f}",
 ];
+const SPINNER_CLAUDE: [&str; 10] = SPINNER_BRAILLE;
 const SPINNER_OPENCODE: [&str; 4] = ["\u{25a3}", "\u{25a4}", "\u{25a5}", "\u{25a6}"];
 const SPINNER_AGY: [&str; 4] = ["\u{25cb}", "\u{25ce}", "\u{25cf}", "\u{25ce}"];
 
@@ -332,8 +330,14 @@ impl Ui {
         secs: f32,
         tokens: u32,
         kind: SpinnerKind,
+        model_name: &str,
     ) {
         let label = tokens_label(tokens);
+        let agy_model = if model_name.is_empty() {
+            "Gemini 3.1 Pro"
+        } else {
+            model_name
+        };
         if !self.animate {
             match kind {
                 SpinnerKind::Codex => self.parts(&[
@@ -363,12 +367,12 @@ impl Ui {
                     (
                         DIM,
                         &format!(
-                            "\u{2026} (esc to cancel \u{00b7} 1s \u{00b7} Gemini 3.1 Pro \u{00b7} {label} tokens)"
+                            "\u{2026} (esc to cancel \u{00b7} 1s \u{00b7} {agy_model} \u{00b7} {label} tokens)"
                         ),
                     ),
                 ]),
                 SpinnerKind::Claude => self.parts(&[
-                    (accent_code, "\u{273b}"),
+                    (accent_code, "\u{280b}"),
                     (DIM, " "),
                     (DIM, verb),
                     (
@@ -450,7 +454,7 @@ impl Ui {
                     line.push_str(dim);
                     let _ = write!(
                         line,
-                        " (esc to cancel \u{00b7} {secs}s \u{00b7} Gemini 3.1 Pro \u{00b7} {label} tokens)"
+                        " (esc to cancel \u{00b7} {secs}s \u{00b7} {agy_model} \u{00b7} {label} tokens)"
                     );
                 }
             }

@@ -316,12 +316,7 @@ impl Renderer for Opencode {
         ]);
         ui.blank();
 
-        // 2. Bottom Prompt Composer (`SplitBorder` + `backgroundPanel`)
-        let prompt_meta = format!("Build  {}  {}", skin.model, skin.provider);
-        panel_blank(ui, ansi::OC_PANEL_ACCENT);
-        panel_line(ui, ansi::OC_PANEL_ACCENT, ansi::OC_PANEL_DIM, &prompt_meta);
-
-        // 3. Keybind hint bar (`⬝⬝⬝⬝⬝⬝⬝⬝ esc interrupt   ctrl+t variants  tab agents  ctrl+p commands`)
+        // 2. Keybind hint bar (`⬝⬝⬝⬝⬝⬝⬝⬝ esc interrupt   ctrl+t variants  tab agents  ctrl+p commands`)
         let left_str =
             " \u{2b1d}\u{2b1d}\u{2b1d}\u{2b1d}\u{2b1d}\u{2b1d}\u{2b1d}\u{2b1d} esc interrupt";
         let l = left_str.chars().count();
@@ -340,7 +335,7 @@ impl Renderer for Opencode {
             (ansi::DIM, keys),
         ]);
 
-        // 4. `routes/session/footer.tsx` bar (`~/code/... (main)` + `• LSP  • MCP  1.2.14`)
+        // 3. `routes/session/footer.tsx` bar (`~/code/... (main)` + `• LSP  • MCP  1.2.14`)
         let cwd = format!(" ~/code/{} (main)", crate::content::PROJECT);
         let right_status = "\u{2022} LSP  \u{2022} MCP  1.2.14";
         let show_status = w >= cwd.chars().count() + right_status.chars().count() + 3;

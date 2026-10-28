@@ -160,6 +160,49 @@ impl Complexity {
     }
 }
 
+#[derive(Copy, Clone, Default, PartialEq, Eq, Debug)]
+pub enum Speed {
+    Slow,
+    #[default]
+    Normal,
+    Fast,
+    Turbo,
+}
+
+impl Speed {
+    #[allow(dead_code)]
+    pub const ALL: [Speed; 4] = [Speed::Slow, Speed::Normal, Speed::Fast, Speed::Turbo];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Speed::Slow => "slow",
+            Speed::Normal => "normal",
+            Speed::Fast => "fast",
+            Speed::Turbo => "turbo",
+        }
+    }
+
+    pub fn parse(input: &str) -> Option<Speed> {
+        match normalize(input).as_str() {
+            "slow" | "s" => Some(Speed::Slow),
+            "normal" | "norm" | "n" => Some(Speed::Normal),
+            "fast" | "f" => Some(Speed::Fast),
+            "turbo" | "t" => Some(Speed::Turbo),
+            _ => None,
+        }
+    }
+
+    /// Speed multiplier applied to base delays.
+    pub fn delay_factor(self) -> f32 {
+        match self {
+            Speed::Slow => 1.8,
+            Speed::Normal => 1.0,
+            Speed::Fast => 0.5,
+            Speed::Turbo => 0.2,
+        }
+    }
+}
+
 fn normalize(input: &str) -> String {
     input
         .trim()

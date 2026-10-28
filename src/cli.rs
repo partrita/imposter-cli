@@ -1,5 +1,5 @@
 use crate::style::Style;
-use crate::types::{Complexity, DevelopmentType, JargonLevel, Theme};
+use crate::types::{Complexity, DevelopmentType, JargonLevel, Speed, Theme};
 
 /// Longest session the CLI accepts, in minutes (about 16.6 hours).
 pub const MAX_MINUTES: u64 = 999;
@@ -12,7 +12,10 @@ pub struct Args {
     pub complexity: Complexity,
     pub duration: u64,
     pub alerts: bool,
+    pub speed: Speed,
+    pub model: Option<String>,
     pub interactive: bool,
+    pub r#continue: bool,
     pub save: bool,
     pub fast: bool,
     pub seed: Option<u64>,
@@ -28,7 +31,10 @@ impl Default for Args {
             complexity: Complexity::Medium,
             duration: 0,
             alerts: false,
+            speed: Speed::Normal,
+            model: None,
             interactive: false,
+            r#continue: false,
             save: false,
             fast: false,
             seed: None,
@@ -57,11 +63,12 @@ pub fn parse() -> Args {
             }
             "--claude" => args.style = Style::Claude,
             "--classic" => args.style = Style::Classic,
+            "--hollywood" | "--hacker" => args.style = Style::Hollywood,
             "-s" | "--style" => {
                 let v = take(&mut it, inline, &key);
                 args.style = Style::parse(&v).unwrap_or_else(|| {
                     fail(&format!(
-                        "unknown style `{v}` (claude, codex, opencode, pi, antigravity, classic)"
+                        "unknown style `{v}` (claude, codex, opencode, pi, antigravity, hollywood, classic)"
                     ))
                 });
             }
@@ -82,10 +89,23 @@ pub fn parse() -> Args {
                 args.jargon = JargonLevel::parse(&v)
                     .unwrap_or_else(|| fail(&format!("unknown jargon `{v}`")));
             }
-            "-c" | "--complexity" => {
+            "--complexity" => {
                 let v = take(&mut it, inline, &key);
                 args.complexity = Complexity::parse(&v)
                     .unwrap_or_else(|| fail(&format!("unknown complexity `{v}`")));
+            }
+            "-c" | "--continue" => args.r#continue = true,
+            "--speed" => {
+                let v = take(&mut it, inline, &key);
+                args.speed = Speed::parse(&v).unwrap_or_else(|| {
+                    fail(&format!("unknown speed `{v}` (slow, normal, fast, turbo)"))
+                });
+            }
+            "-m" | "--model" => {
+                let v = take(&mut it, inline, &key);
+                if !v.trim().is_empty() {
+                    args.model = Some(v);
+                }
             }
             "-T" | "--duration" => {
                 let v = take(&mut it, inline, &key);
@@ -141,10 +161,11 @@ USAGE:
     imposter --interactive
 
 OPTIONS:
-    -s, --style <NAME>            AI CLI: claude codex opencode pi antigravity, or classic
+    -s, --style <NAME>            AI CLI: claude codex opencode pi antigravity hollywood, or classic
                                   [default: claude]
         --claude                  Shortcut for --style claude
         --classic                 Shortcut for --style classic
+        --hollywood               Shortcut for --style hollywood
     -t, --theme <MODE>            Color theme: dark or light [default: dark]
         --dark                    Shortcut for --theme dark
         --light                   Shortcut for --theme light
@@ -154,11 +175,14 @@ OPTIONS:
                                   [default: 0]
     -a, --alerts                  Sprinkle in fake errors and fixes
     -j, --jargon <LEVEL>          low medium high extreme
-    -c, --complexity <LEVEL>      low medium high extreme
+        --complexity <LEVEL>      low medium high extreme
+    -c, --continue                Continue directly with previous settings without TUI
+        --speed <SPEED>           Playback speed: slow normal fast turbo [default: normal]
+    -m, --model <NAME>            Custom model name (e.g. claude-3-7-sonnet, gpt-4o)
         --fast                    No animation (useful for demos, GIFs, CI)
         --seed <N>                Deterministic output
         --save                    Save the current settings
-    -i, --interactive             Open the setup TUI (automatic on first run)
+    -i, --interactive             Open the setup TUI explicitly
     -h, --help                    Show this help
     -V, --version                 Show the version
 
@@ -192,5 +216,13 @@ mod tests {
     fn theme_parses_dark_and_light() {
         assert_eq!(Theme::parse("dark"), Some(Theme::Dark));
         assert_eq!(Theme::parse("light"), Some(Theme::Light));
+    }
+
+    #[test]
+    fn speed_parses_all_variants() {
+        assert_eq!(Speed::parse("slow"), Some(Speed::Slow));
+        assert_eq!(Speed::parse("normal"), Some(Speed::Normal));
+        assert_eq!(Speed::parse("fast"), Some(Speed::Fast));
+        assert_eq!(Speed::parse("turbo"), Some(Speed::Turbo));
     }
 }

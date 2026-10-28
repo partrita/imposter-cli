@@ -2,8 +2,11 @@ use crate::config::Config;
 use crate::content;
 use crate::jargon;
 use crate::style::Style;
-use crate::types::{Complexity, DevelopmentType, JargonLevel, Theme};
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crate::types::{Complexity, Theme};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+    MouseButton, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -20,24 +23,20 @@ use std::time::Duration;
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum Field {
     Style,
+    Model,
+    Speed,
     Theme,
-    DevType,
     Duration,
-    Jargon,
-    Complexity,
-    Alerts,
     Start,
     Save,
 }
 
-const FIELDS: [Field; 9] = [
+const FIELDS: [Field; 7] = [
     Field::Style,
+    Field::Model,
+    Field::Speed,
     Field::Theme,
-    Field::DevType,
     Field::Duration,
-    Field::Jargon,
-    Field::Complexity,
-    Field::Alerts,
     Field::Start,
     Field::Save,
 ];
@@ -46,19 +45,18 @@ impl Field {
     fn label(self) -> &'static str {
         match self {
             Field::Style => "Style",
+            Field::Model => "Model",
+            Field::Speed => "Speed",
             Field::Theme => "Theme",
-            Field::DevType => "Dev stack",
             Field::Duration => "Duration",
-            Field::Jargon => "Jargon",
-            Field::Complexity => "Complexity",
-            Field::Alerts => "Lint alerts",
             Field::Start => "",
             Field::Save => "",
         }
     }
 
+    #[allow(dead_code)]
     fn editable(self) -> bool {
-        matches!(self, Field::Duration)
+        matches!(self, Field::Duration | Field::Model)
     }
 }
 
@@ -160,8 +158,14 @@ impl App {
                 KeyCode::Backspace => {
                     self.buf.pop();
                 }
-                KeyCode::Char(c) if c.is_ascii_digit() && self.buf.len() < 3 => {
-                    self.buf.push(c);
+                KeyCode::Char(c) => {
+                    if FIELDS[self.field] == Field::Duration {
+                        if c.is_ascii_digit() && self.buf.len() < 3 {
+                            self.buf.push(c);
+                        }
+                    } else if FIELDS[self.field] == Field::Model && self.buf.len() < 32 {
+                        self.buf.push(c);
+                    }
                 }
                 _ => {}
             }
@@ -201,7 +205,7 @@ impl App {
                 self.cfg.theme = cycle(&Theme::ALL, self.cfg.theme, 1);
             }
             KeyCode::Char('s') => self.save(),
-            KeyCode::Char(c @ '1'..='6') => {
+            KeyCode::Char(c @ '1'..='7') => {
                 let idx = (c as usize) - ('1' as usize);
                 if idx < Style::ALL.len() {
                     self.cfg.style = Style::ALL[idx];
@@ -210,8 +214,12 @@ impl App {
             KeyCode::Enter => match FIELDS[self.field] {
                 Field::Start => self.start = true,
                 Field::Save => self.save(),
-                field if field.editable() => {
+                Field::Duration => {
                     self.buf = self.cfg.duration.to_string();
+                    self.editing = true;
+                }
+                Field::Model => {
+                    self.buf = self.cfg.model.clone().unwrap_or_default();
                     self.editing = true;
                 }
                 _ => self.cycle(1),
@@ -220,18 +228,58 @@ impl App {
         }
     }
 
+    fn mouse_click(&mut self, col: u16, row: u16) {
+        // Header style shortcuts row (row == 1 in alternate screen)
+        if row == 1 && col > 15 {
+            let offset = (col.saturating_sub(15) / 12) as usize;
+            if offset < Style::ALL.len() {
+                self.cfg.style = Style::ALL[offset];
+                return;
+            }
+        }
+
+        // Form region: row 4..=8 for the 5 config fields
+        if (4..=8).contains(&row) {
+            let clicked_field = (row - 4) as usize;
+            if clicked_field < 5 {
+                if self.field == clicked_field {
+                    if FIELDS[self.field].editable() {
+                        if FIELDS[self.field] == Field::Duration {
+                            self.buf = self.cfg.duration.to_string();
+                        } else {
+                            self.buf = self.cfg.model.clone().unwrap_or_default();
+                        }
+                        self.editing = true;
+                    } else {
+                        self.cycle(1);
+                    }
+                } else {
+                    self.field = clicked_field;
+                }
+                return;
+            }
+        }
+
+        // Action buttons row (row 10)
+        if row == 10 {
+            if (3..=21).contains(&col) {
+                self.start = true;
+            } else if (23..=42).contains(&col) {
+                self.save();
+            }
+        }
+    }
+
     fn cycle(&mut self, dir: i32) {
         match FIELDS[self.field] {
             Field::Style => self.cfg.style = cycle(&Style::ALL, self.cfg.style, dir),
+            Field::Model => {
+                if self.cfg.model.is_some() {
+                    self.cfg.model = None;
+                }
+            }
+            Field::Speed => self.cfg.speed = cycle(&crate::types::Speed::ALL, self.cfg.speed, dir),
             Field::Theme => self.cfg.theme = cycle(&Theme::ALL, self.cfg.theme, dir),
-            Field::DevType => {
-                self.cfg.dev_type = cycle(&DevelopmentType::ALL, self.cfg.dev_type, dir)
-            }
-            Field::Jargon => self.cfg.jargon = cycle(&JargonLevel::ALL, self.cfg.jargon, dir),
-            Field::Complexity => {
-                self.cfg.complexity = cycle(&Complexity::ALL, self.cfg.complexity, dir)
-            }
-            Field::Alerts => self.cfg.alerts = !self.cfg.alerts,
             Field::Duration => {
                 let step = 5i64;
                 let next = self.cfg.duration as i64 + if dir > 0 { step } else { -step };
@@ -245,6 +293,13 @@ impl App {
         if FIELDS[self.field] == Field::Duration {
             if let Ok(v) = self.buf.trim().parse::<u64>() {
                 self.cfg.duration = v.min(crate::cli::MAX_MINUTES);
+            }
+        } else if FIELDS[self.field] == Field::Model {
+            let trimmed = self.buf.trim();
+            if trimmed.is_empty() {
+                self.cfg.model = None;
+            } else {
+                self.cfg.model = Some(trimmed.to_string());
             }
         }
         self.editing = false;
@@ -339,9 +394,7 @@ impl App {
     }
 
     fn draw_form(&self, f: &mut Frame, area: Rect, pal: &Palette) {
-        let dim = TuiStyle::default().fg(pal.dim);
-        let mut lines: Vec<Line> = Vec::with_capacity(20);
-        lines.push(Line::from(""));
+        let mut lines: Vec<Line> = Vec::with_capacity(12);
 
         for (i, field) in FIELDS.iter().enumerate() {
             if matches!(field, Field::Start | Field::Save) {
@@ -359,7 +412,7 @@ impl App {
 
             let mut spans = vec![
                 Span::styled(pointer, TuiStyle::default().fg(pal.accent)),
-                Span::styled(format!("{:<12}", field.label()), label_style),
+                Span::styled(format!("{:<10}", field.label()), label_style),
             ];
             spans.extend(self.render_field_value(*field, selected, pal));
             lines.push(Line::from(spans));
@@ -396,13 +449,10 @@ impl App {
         ]));
 
         lines.push(Line::from(""));
-        let (desc_title, desc_body) = self.field_description(FIELDS[self.field]);
+        let dim = TuiStyle::default().fg(pal.dim);
+        let (_, desc_body) = self.field_description(FIELDS[self.field]);
         lines.push(Line::from(vec![
-            Span::styled("   \u{2500}\u{2500} ", dim),
-            Span::styled(desc_title, TuiStyle::default().fg(pal.accent)),
-        ]));
-        lines.push(Line::from(vec![
-            Span::raw("   "),
+            Span::styled("   \u{00bb} ", TuiStyle::default().fg(pal.accent)),
             Span::styled(desc_body, dim),
         ]));
 
@@ -412,7 +462,7 @@ impl App {
             .border_style(TuiStyle::default().fg(pal.accent))
             .style(TuiStyle::default().bg(pal.bg).fg(pal.fg))
             .title(Span::styled(
-                " Session Configuration ",
+                " Configuration ",
                 TuiStyle::default()
                     .fg(pal.accent)
                     .add_modifier(Modifier::BOLD),
@@ -459,6 +509,40 @@ impl App {
                     Span::styled(format!("({idx}/{})", Style::ALL.len()), dim),
                 ]
             }
+            Field::Model => {
+                if self.editing && selected {
+                    return vec![
+                        Span::styled(
+                            format!("{}\u{2588}", self.buf),
+                            TuiStyle::default()
+                                .fg(pal.accent)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled("  (Enter save, Esc cancel)", dim),
+                    ];
+                }
+                let display = match &self.cfg.model {
+                    Some(m) if !m.is_empty() => m.clone(),
+                    _ => format!("auto ({})", self.cfg.style.skin().model),
+                };
+                vec![
+                    Span::styled(format!("{display:<24}"), val_style),
+                    Span::styled("(Enter to edit)", dim),
+                ]
+            }
+            Field::Speed => {
+                let idx = crate::types::Speed::ALL
+                    .iter()
+                    .position(|s| *s == self.cfg.speed)
+                    .unwrap_or(0)
+                    + 1;
+                vec![
+                    Span::styled("\u{2039} ", arrow_style),
+                    Span::styled(format!("{:<12}", self.cfg.speed.as_str()), val_style),
+                    Span::styled("\u{203a} ", arrow_style),
+                    Span::styled(format!("({idx}/{})", crate::types::Speed::ALL.len()), dim),
+                ]
+            }
             Field::Theme => {
                 let dark_active = self.cfg.theme == Theme::Dark;
                 let active_style = TuiStyle::default()
@@ -478,19 +562,6 @@ impl App {
                         Span::styled("[\u{263c} light]", active_style),
                     ]
                 }
-            }
-            Field::DevType => {
-                let idx = DevelopmentType::ALL
-                    .iter()
-                    .position(|d| *d == self.cfg.dev_type)
-                    .unwrap_or(0)
-                    + 1;
-                vec![
-                    Span::styled("\u{2039} ", arrow_style),
-                    Span::styled(format!("{:<16}", self.cfg.dev_type.as_str()), val_style),
-                    Span::styled("\u{203a} ", arrow_style),
-                    Span::styled(format!("({idx}/{})", DevelopmentType::ALL.len()), dim),
-                ]
             }
             Field::Duration => {
                 if self.editing && selected {
@@ -516,35 +587,6 @@ impl App {
                     Span::styled("(\u{2190}/\u{2192} \u{00b1}5m, Enter type)", dim),
                 ]
             }
-            Field::Jargon => {
-                let lvl = match self.cfg.jargon {
-                    JargonLevel::Low => 1,
-                    JargonLevel::Medium => 2,
-                    JargonLevel::High => 3,
-                    JargonLevel::Extreme => 4,
-                };
-                let bars = format!("{}{}", "\u{25a0}".repeat(lvl), "\u{25a1}".repeat(4 - lvl));
-                vec![
-                    Span::styled(bars, TuiStyle::default().fg(pal.accent)),
-                    Span::raw(" "),
-                    Span::styled(self.cfg.jargon.as_str().to_string(), val_style),
-                ]
-            }
-            Field::Complexity => {
-                let lvl = match self.cfg.complexity {
-                    Complexity::Low => 1,
-                    Complexity::Medium => 2,
-                    Complexity::High => 3,
-                    Complexity::Extreme => 4,
-                };
-                let bars = format!("{}{}", "\u{25a0}".repeat(lvl), "\u{25a1}".repeat(4 - lvl));
-                vec![
-                    Span::styled(bars, TuiStyle::default().fg(pal.accent)),
-                    Span::raw(" "),
-                    Span::styled(self.cfg.complexity.as_str().to_string(), val_style),
-                ]
-            }
-            Field::Alerts => toggle_spans(self.cfg.alerts, pal),
             Field::Start | Field::Save => Vec::new(),
         }
     }
@@ -553,51 +595,34 @@ impl App {
         match field {
             Field::Style => {
                 let desc = match self.cfg.style {
-                    Style::Claude => "Anthropic Claude Code v2.1: Clawd banner, \u{276f} prompt, \u{23fa} tools & \u{23bf} tree output.",
+                    Style::Claude => "Anthropic Claude Code v2.1: Clawd banner, \u{276f} prompt, \u{25cf} tools & \u{23bf} tree output.",
                     Style::Classic => "Legacy stakeholder system log: progress bars, symbol linker & p99 metrics.",
                     Style::Codex => "OpenAI Codex CLI (codex-rs): >_ header, \u{203a} prompt, \u{2022} Explored/Edited/Ran blocks.",
                     Style::Opencode => "OpenCode TUI: SplitBorder \u{2503} backgroundPanel header/prompt/tools, Thinking:, \u{2192} Read & \u{25a3} Build.",
                     Style::Pi => "earendil-works/pi: \u{2580}\u{2588}\u{2580} header, #343541 userMessageBg & #283228 toolSuccessBg boxes, footer.ts.",
                     Style::Antigravity => "Google Antigravity CLI (agy): dotted horizon banner, \u{25cb} trajectory tools & /statusline HUD.",
+                    Style::Hollywood => "Hollywood Hacker: matrix hex dump torrent, mainframe override gauges & ACCESS GRANTED banners.",
                 };
                 ("Active CLI Persona", desc.to_string())
             }
+            Field::Model => (
+                "AI Model Designation",
+                "Custom model name (e.g. claude-3-7-sonnet, gpt-4o, gemini-2.5-pro). Leave empty for style default."
+                    .to_string(),
+            ),
+            Field::Speed => (
+                "Transcript Playback Speed",
+                "Slow (0.5x), Normal (1.0x), Fast (2.0x), Turbo (5.0x) with natural jitter variations."
+                    .to_string(),
+            ),
             Field::Theme => (
                 "Color Theme (Dark / Light)",
                 "Adapts accent, text, border, and diff contrast for dark or light terminals (shortcut: t)."
                     .to_string(),
             ),
-            Field::DevType => {
-                let sample = content::files(self.cfg.dev_type);
-                (
-                    "Target Codebase Files",
-                    format!(
-                        "Touches files like {}, {}, {}",
-                        sample[0], sample[1], sample[2]
-                    ),
-                )
-            }
             Field::Duration => (
                 "Auto-Stop Timer",
                 "0 runs until Ctrl-C. Set 1-999 minutes to exit cleanly on a deadline.".to_string(),
-            ),
-            Field::Jargon => {
-                let line = jargon::lines(self.cfg.jargon)[0];
-                ("Commit & Status Copy", format!("Sample: \"{line}\""))
-            }
-            Field::Complexity => (
-                "Turn Depth & Plans",
-                if self.cfg.complexity == Complexity::Low {
-                    "Low hides Todo / Plan / Subagents blocks for a quieter stream.".to_string()
-                } else {
-                    "Medium+ injects Todo checklists, Updated Plans, or Subagents trajectory blocks."
-                        .to_string()
-                },
-            ),
-            Field::Alerts => (
-                "Simulated Failures",
-                "Periodically injects a failing cargo clippy run followed by an automatic fix diff."
-                    .to_string(),
             ),
             Field::Start => (
                 "Launch Session",
@@ -624,6 +649,12 @@ impl App {
 
         let file = content::files(self.cfg.dev_type)[0];
         let prompt = content::PROMPTS[0];
+
+        let effective_model = self
+            .cfg
+            .model
+            .as_deref()
+            .unwrap_or(self.cfg.style.skin().model);
 
         let mut lines: Vec<Line> = match self.cfg.style {
             Style::Classic => vec![
@@ -661,7 +692,7 @@ impl App {
                         Span::styled(" \u{2502} ", dim),
                         Span::styled("\u{2590}\u{259b}\u{2588}\u{2588}\u{2588}\u{259c}\u{258c} ", acc),
                         Span::styled("Welcome back! ", bold),
-                        Span::styled(skin.model, dim),
+                        Span::styled(effective_model, dim),
                     ]),
                     Line::from(vec![
                         Span::styled(" \u{2502} ", dim),
@@ -677,7 +708,7 @@ impl App {
                         Span::styled(prompt, fg),
                     ]),
                     Line::from(vec![
-                        Span::styled(" \u{23fa} ", acc),
+                        Span::styled(" \u{25cf} ", acc),
                         Span::styled("Read", bold),
                         Span::styled(format!("({file})"), fg),
                     ]),
@@ -686,7 +717,7 @@ impl App {
                         dim,
                     )),
                     Line::from(vec![
-                        Span::styled(" \u{23fa} ", acc),
+                        Span::styled(" \u{25cf} ", acc),
                         Span::styled("Update", bold),
                         Span::styled(format!("({file})"), fg),
                     ]),
@@ -711,7 +742,7 @@ impl App {
                     Line::from(vec![
                         Span::styled(" >_ ", acc_bold),
                         Span::styled(skin.title, bold),
-                        Span::styled(format!(" \u{00b7} {}", skin.model), dim),
+                        Span::styled(format!(" \u{00b7} {effective_model}"), dim),
                     ]),
                     Line::from(vec![
                         Span::styled(" \u{203a} ", acc_bold),
@@ -822,7 +853,7 @@ impl App {
                     ]),
                     Line::from(vec![
                         Span::styled("   \u{25a3} Build", acc_bold),
-                        Span::styled(format!(" \u{00b7} {} \u{00b7} 4.2s", skin.model), dim),
+                        Span::styled(format!(" \u{00b7} {effective_model} \u{00b7} 4.2s"), dim),
                     ]),
                     Line::from(vec![
                         Span::styled(" \u{2b1d}\u{2b1d}\u{2b1d}\u{2b1d}\u{2b1d}\u{2b1d}\u{2b1d}\u{2b1d}", acc),
@@ -905,7 +936,7 @@ impl App {
                     )),
                     Line::from(vec![
                         Span::styled("   Welcome to the Antigravity CLI. ", bold),
-                        Span::styled(skin.model, acc),
+                        Span::styled(effective_model, acc),
                     ]),
                     Line::from(vec![
                         Span::styled(" \u{276f} ", acc_bold),
@@ -943,10 +974,29 @@ impl App {
                     Line::from(vec![
                         Span::styled("   READY", green),
                         Span::styled(" \u{2502} ", dim),
-                        Span::styled(skin.model, acc),
+                        Span::styled(effective_model, acc),
                         Span::styled(" \u{2502} Ctx [\u{2588}\u{2588}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}] 18%", dim),
                     ]),
                     Line::from(Span::styled(format!("   {}", skin.footer), dim)),
+                ]
+            }
+            Style::Hollywood => {
+                let skin = self.cfg.style.skin();
+                vec![
+                    Line::from(Span::styled("  :: HOLLYWOOD CYBER WARFARE TERMINAL ::", acc_bold)),
+                    Line::from(vec![
+                        Span::styled("  TARGET: ", dim),
+                        Span::styled("PENTAGON_PRIMARY_GRID", TuiStyle::default().fg(Color::Yellow)),
+                        Span::styled(" \u{00b7} ", dim),
+                        Span::styled(effective_model, acc),
+                    ]),
+                    Line::from(Span::styled("  0x7FFF94A0  48 89 E5 48 83 EC 20 E8 |H..H.. .|", acc)),
+                    Line::from(Span::styled("  0x7FFF94B0  B8 00 00 00 00 48 89 EC |.....H..|", acc)),
+                    Line::from(Span::styled("  [████████████████████░░░░░░░░░░] 68% OVERRIDING KERNEL", acc)),
+                    Line::from(Span::styled("  \u{2554}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2557}", acc)),
+                    Line::from(Span::styled("  \u{2551}           [ ACCESS GRANTED \u{00b7} ROOT SHELL ACQUIRED ]           \u{2551}", acc_bold)),
+                    Line::from(Span::styled("  \u{255a}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{255d}", acc)),
+                    Line::from(Span::styled(format!("  {}", skin.footer), dim)),
                 ]
             }
         };
@@ -1046,28 +1096,30 @@ impl App {
         } else if self.editing {
             Line::from(vec![
                 keycap("Enter", accent),
-                Span::raw(" commit   "),
+                Span::raw(" Commit   "),
                 keycap("Backspace", accent),
-                Span::raw(" delete   "),
+                Span::raw(" Delete   "),
                 keycap("Esc", accent),
-                Span::raw(" cancel"),
+                Span::raw(" Cancel editing"),
             ])
         } else {
             Line::from(vec![
-                keycap("\u{2191}\u{2193}/jk", accent),
-                Span::raw(" move  "),
-                keycap("\u{2190}\u{2192}/hl", accent),
-                Span::raw(" change  "),
-                keycap("1-6", accent),
-                Span::raw(" style  "),
+                keycap("\u{2191}\u{2193}/Tab", accent),
+                Span::raw(" Move  "),
+                keycap("\u{2190}\u{2192}/Space", accent),
+                Span::raw(" Cycle  "),
+                keycap("Enter", accent),
+                Span::raw(" Edit  "),
+                keycap("1-7", accent),
+                Span::raw(" Style  "),
                 keycap("t", accent),
-                Span::raw(" theme  "),
+                Span::raw(" Theme  "),
                 keycap("Ctrl+R", accent),
-                Span::raw(" start  "),
+                Span::raw(" Start  "),
                 keycap("Ctrl+S", accent),
-                Span::raw(" save  "),
+                Span::raw(" Save  "),
                 keycap("q/Esc", accent),
-                Span::raw(" quit"),
+                Span::raw(" Quit"),
             ])
         };
 
@@ -1084,6 +1136,7 @@ impl App {
     }
 }
 
+#[allow(dead_code)]
 fn toggle_spans(on: bool, pal: &Palette) -> Vec<Span<'static>> {
     if on {
         vec![Span::styled(
@@ -1118,7 +1171,7 @@ pub fn run(cfg: Config) -> Option<Config> {
         return None;
     }
     let mut out = stdout();
-    if execute!(out, EnterAlternateScreen).is_err() {
+    if execute!(out, EnterAlternateScreen, EnableMouseCapture).is_err() {
         let _ = disable_raw_mode();
         return None;
     }
@@ -1143,11 +1196,16 @@ pub fn run(cfg: Config) -> Option<Config> {
             Ok(false) => continue,
             Err(_) => break,
         }
-        let Ok(Event::Key(key)) = event::read() else {
-            continue;
-        };
-        if key.kind == KeyEventKind::Press {
-            app.key(key.code, key.modifiers);
+        match event::read() {
+            Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
+                app.key(key.code, key.modifiers);
+            }
+            Ok(Event::Mouse(mouse)) => {
+                if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                    app.mouse_click(mouse.column, mouse.row);
+                }
+            }
+            _ => continue,
         }
         if app.start {
             result = Some(app.cfg.clone());
@@ -1159,7 +1217,11 @@ pub fn run(cfg: Config) -> Option<Config> {
     }
 
     let _ = disable_raw_mode();
-    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+    let _ = execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    );
     let _ = terminal.show_cursor();
     result
 }

@@ -3,6 +3,7 @@ mod classic;
 mod cli;
 mod config;
 mod content;
+mod hollywood;
 mod jargon;
 mod rng;
 mod setup;
@@ -26,7 +27,8 @@ fn interactive(args: &cli::Args) -> config::Config {
     #[cfg(feature = "tui")]
     {
         if Ui::stdout_is_tty() {
-            if let Some(cfg) = tui::run(config::Config::from_args(args)) {
+            let initial = config::Config::load().unwrap_or_else(|| config::Config::from_args(args));
+            if let Some(cfg) = tui::run(initial) {
                 return cfg;
             }
             std::process::exit(0);
@@ -35,29 +37,25 @@ fn interactive(args: &cli::Args) -> config::Config {
     setup::run(args)
 }
 
-/// First launch with no arguments and no saved config: open the setup TUI
-/// instead of dropping straight into a session. The result is saved so the
-/// next run starts immediately.
 fn no_args() -> bool {
     std::env::args_os().len() == 1
-}
-
-fn first_run() -> bool {
-    no_args() && Ui::stdout_is_tty() && !config::Config::path().map(|p| p.exists()).unwrap_or(false)
 }
 
 fn main() {
     let args = cli::parse();
 
-    let setup_now = args.interactive || first_run();
+    // In a TTY environment:
+    // - Bare `imposter` or explicit `-i` starts the interactive TUI (using saved config as baseline).
+    // - `-c` / `--continue` bypasses TUI and directly runs the saved settings.
+    // - Any other explicit flags run the session directly.
+    let is_tty = Ui::stdout_is_tty();
+    let setup_now = is_tty && (args.interactive || (no_args() && !args.r#continue));
+
     let cfg = if setup_now {
         let cfg = interactive(&args);
-        if !args.interactive {
-            let _ = cfg.save();
-        }
+        let _ = cfg.save();
         cfg
-    } else if no_args() {
-        // A bare `imposter` uses the saved settings; any explicit flag wins.
+    } else if args.r#continue || no_args() {
         config::Config::load().unwrap_or_else(|| config::Config::from_args(&args))
     } else {
         config::Config::from_args(&args)
@@ -87,6 +85,7 @@ fn main() {
 
     match cfg.style {
         style::Style::Classic => classic::run(&mut ui, &cfg, &args, &mut rng, deadline),
+        style::Style::Hollywood => hollywood::run(&mut ui, &cfg, &args, &mut rng, deadline),
         _ => transcript::run(&mut ui, &cfg, &args, &mut rng, deadline),
     }
 

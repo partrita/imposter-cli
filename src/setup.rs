@@ -12,7 +12,7 @@ pub fn run(args: &Args) -> Config {
     println!("press enter to keep the value in brackets\n");
 
     let answer = ask(&format!(
-        "style [claude/codex/opencode/pi/antigravity/classic] ({})",
+        "style [claude/codex/opencode/pi/antigravity/hollywood/classic] ({})",
         cfg.style.as_str()
     ));
     if let Some(style) = Style::parse(&answer) {
@@ -51,6 +51,24 @@ pub fn run(args: &Args) -> Config {
     ));
     if let Some(complexity) = Complexity::parse(&answer) {
         cfg.complexity = complexity;
+    }
+
+    let answer = ask(&format!(
+        "speed [slow/normal/fast/turbo] ({})",
+        cfg.speed.as_str()
+    ));
+    if let Some(speed) = crate::types::Speed::parse(&answer) {
+        cfg.speed = speed;
+    }
+
+    let current_model = cfg.model.as_deref().unwrap_or("");
+    let answer = ask(&format!(
+        "custom model (empty for style default) [{}]",
+        current_model
+    ));
+    let trimmed = answer.trim();
+    if !trimmed.is_empty() {
+        cfg.model = Some(trimmed.to_string());
     }
 
     let answer = ask(&format!(

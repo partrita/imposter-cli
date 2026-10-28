@@ -13,7 +13,7 @@ pub static SKIN: Skin = Skin {
     accent: "\x1b[38;2;215;119;87m",
     rgb: (215, 119, 87),
     rgb_light: (180, 76, 43),
-    bullet: "\u{23fa}",
+    bullet: "\u{25cf}",
     result: "\u{23bf}",
     prompt: "\u{276f} ",
     footer: "\u{23f5}\u{23f5} accept edits on (shift+tab to cycle)",

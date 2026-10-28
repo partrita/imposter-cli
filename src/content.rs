@@ -61,6 +61,19 @@ pub const INTENTS: &[&str] = &[
     "Tracing the value backwards from where it breaks.",
 ];
 
+pub const THOUGHTS: &[&str] = &[
+    "The caller expects idempotency here. If the retry triggers before the state machine transitions, we could spawn duplicate jobs. Let's trace the worker lifecycle and inspect concurrency locks.",
+    "Analyzing recent regression traces... The connection pool is exhausted during peak spikes because keep-alive sockets aren't releasing properly under backpressure.",
+    "Checking AST structure and symbol definitions. We need to ensure zero-cost abstraction without introducing unnecessary heap allocations in the critical path.",
+    "The schema migration needs to be backward-compatible with older replicas. Adding an index concurrently prevents locking the primary table during traffic.",
+    "Examining call graph: handler -> middleware -> repository. The authorization context might be dropped when propagating through async boundaries.",
+    "Evaluating edge cases: empty payload, partial chunk streaming, and socket reset mid-transfer. Adding defensive bounds checks here will prevent panics.",
+    "Tracing downstream queue lag. The batch size is fixed at 100, which starves consumer threads when individual payload sizes exceed 256KB.",
+    "Let's review the memory profile: heap allocations spike during decompression. Streaming the raw buffer directly into the serializer should mitigate memory pressure.",
+    "Checking test suite fixtures. The mock server was returning HTTP 200 with an empty body instead of simulating realistic network timeouts.",
+    "Verifying invariants: state must remain atomic across thread boundaries. Using a compare-and-swap loop here guarantees thread safety without lock contention.",
+];
+
 pub const SEARCHES: &[&str] = &[
     "payment",
     "retry",

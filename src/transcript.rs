@@ -48,6 +48,7 @@ const PLANS: &[&[Step]] = &[
 struct Decks {
     prompts: Deck<&'static str>,
     intents: Deck<&'static str>,
+    thoughts: Deck<&'static str>,
     searches: Deck<&'static str>,
     verbs: Deck<&'static str>,
     todos: Deck<&'static [&'static str]>,
@@ -64,6 +65,7 @@ impl Decks {
         Self {
             prompts: Deck::new(content::PROMPTS, rng),
             intents: Deck::new(content::INTENTS, rng),
+            thoughts: Deck::new(content::THOUGHTS, rng),
             searches: Deck::new(content::SEARCHES, rng),
             verbs: Deck::new(content::VERBS, rng),
             todos: Deck::new(content::TODOS, rng),
@@ -77,11 +79,27 @@ impl Decks {
     }
 }
 
+fn pacing_pause(ui: &mut Ui, base_ms: u64, speed_factor: f32, rng: &mut Rng) {
+    let scaled = (base_ms as f32 * speed_factor) as u64;
+    // Add jitter: ±30% variation with a 15ms floor
+    let jitter_range = (scaled as f32 * 0.3).round() as i64;
+    let jitter = if jitter_range > 0 {
+        rng.range((-jitter_range) as u64, jitter_range as u64) as i64 - jitter_range
+    } else {
+        0
+    };
+    let final_ms = ((scaled as i64 + jitter).max(15)) as u64;
+    ui.pause(final_ms);
+}
+
 pub fn run(ui: &mut Ui, cfg: &Config, args: &Args, rng: &mut Rng, deadline: Option<Instant>) {
     let renderer = cfg.style.renderer();
     let skin = renderer.skin();
     let mut decks = Decks::new(cfg, rng);
     renderer.welcome(ui);
+
+    let speed_factor = cfg.speed.delay_factor();
+    let effective_model = cfg.model.as_deref().unwrap_or(skin.model);
 
     let mut tokens: u32 = rng.range(380, 940) as u32;
     let mut turns: u32 = 0;
@@ -90,10 +108,10 @@ pub fn run(ui: &mut Ui, cfg: &Config, args: &Args, rng: &mut Rng, deadline: Opti
         turns += 1;
         let prompt = decks.prompts.next(rng);
         renderer.prompt(ui, prompt);
-        ui.pause(150);
+        pacing_pause(ui, 150, speed_factor, rng);
 
         renderer.assistant(ui, decks.intents.next(rng));
-        ui.pause(120);
+        pacing_pause(ui, 120, speed_factor, rng);
 
         // Sometimes show the tool's own thinking word, sometimes a varied verb,
         // so the spinner line itself never becomes a fixed signature.
@@ -103,11 +121,24 @@ pub fn run(ui: &mut Ui, cfg: &Config, args: &Args, rng: &mut Rng, deadline: Opti
             decks.verbs.next(rng)
         };
         ui.blank();
-        ui.spinner(skin.accent, verb, 1.05, tokens, renderer.spinner_kind());
+        let spin_dur = 1.05 * speed_factor;
+        ui.spinner(
+            skin.accent,
+            verb,
+            spin_dur,
+            tokens,
+            renderer.spinner_kind(),
+            effective_model,
+        );
         ui.flush();
         if crate::expired(deadline) {
             break;
         }
+
+        // Show thinking stream animation (1-3 thought sentences)
+        let thought_text = decks.thoughts.next(rng);
+        renderer.thought(ui, thought_text);
+        pacing_pause(ui, 100, speed_factor, rng);
 
         let plan = decks.plans.next(rng);
         let mut file = decks.files.next(rng);
@@ -146,7 +177,7 @@ pub fn run(ui: &mut Ui, cfg: &Config, args: &Args, rng: &mut Rng, deadline: Opti
                     renderer.patch(ui, diff, rng.range(18, 140));
                     summary = text;
                     tokens += rng.range(250, 800) as u32;
-                    ui.pause(90);
+                    pacing_pause(ui, 90, speed_factor, rng);
                 }
                 Step::Test => {
                     let (cmd, out) = decks.bash.next(rng);
@@ -158,16 +189,16 @@ pub fn run(ui: &mut Ui, cfg: &Config, args: &Args, rng: &mut Rng, deadline: Opti
                     let cmd = format!("git commit -am \"{message}\"");
                     let out = format!("[main {:07x}] {message}", rng.next_u64() & 0xfff_ffff);
                     renderer.tool(ui, "Bash", &cmd, &out);
-                    ui.pause(250);
+                    pacing_pause(ui, 250, speed_factor, rng);
                 }
             }
-            ui.pause(55);
+            pacing_pause(ui, 55, speed_factor, rng);
         }
 
         if cfg.complexity != crate::types::Complexity::Low && turns % 2 == 1 {
             let items = decks.todos.next(rng);
             renderer.todo(ui, items);
-            ui.pause(160);
+            pacing_pause(ui, 160, speed_factor, rng);
         }
 
         if args.alerts && rng.chance(1, 2) {
@@ -190,7 +221,7 @@ pub fn run(ui: &mut Ui, cfg: &Config, args: &Args, rng: &mut Rng, deadline: Opti
         }
         ui.blank();
         ui.flush();
-        ui.pause(900);
+        pacing_pause(ui, 900, speed_factor, rng);
     }
 
     ui.blank();
