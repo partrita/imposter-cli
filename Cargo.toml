@@ -1,6 +1,6 @@
 [package]
 name = "imposter"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 rust-version = "1.88"
 description = "A zero-dependency CLI that fakes a Claude Code session so you look busy. Satire."
