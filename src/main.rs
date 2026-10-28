@@ -42,6 +42,14 @@ fn no_args() -> bool {
 }
 
 fn main() {
+    let _ = ctrlc::set_handler(|| {
+        // Restore cursor, reset ANSI attributes and clean exit immediately
+        let mut stdout = std::io::stdout();
+        let _ = std::io::Write::write_all(&mut stdout, b"\x1b[?25h\x1b[0m\n");
+        let _ = std::io::Write::flush(&mut stdout);
+        std::process::exit(130);
+    });
+
     let args = cli::parse();
 
     // In a TTY environment:
