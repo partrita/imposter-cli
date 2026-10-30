@@ -14,8 +14,6 @@ exclude = [
     "assets/*",
     ".github/*",
     "Dockerfile",
-    "flake.nix",
-    "flake.lock",
     "rust-toolchain.toml",
     "target/*",
 ]

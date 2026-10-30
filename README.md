@@ -68,12 +68,6 @@ cargo install imposter
 cargo install --git https://github.com/partrita/imposter-cli
 ```
 
-### Nix 환경
-
-```bash
-nix run github:partrita/imposter-cli
-```
-
 ### Docker 컨테이너 (바이너리 전용 scratch 이미지)
 
 ```bash
