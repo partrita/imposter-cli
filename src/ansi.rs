@@ -217,7 +217,6 @@ mod raw_input {
         control_key_state: u32,
     }
 
-    const ENABLE_PROCESSED_INPUT: u32 = 0x0001;
     const ENABLE_LINE_INPUT: u32 = 0x0002;
     const ENABLE_ECHO_INPUT: u32 = 0x0004;
     const KEY_EVENT: u16 = 0x0001;

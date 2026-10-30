@@ -10,6 +10,9 @@ modifies files and never calls a model.
 ```bash
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
+cargo clippy --all-targets --no-default-features -- -D warnings
+# Cross-target verification (check platform-specific cfg code like Windows):
+cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings
 cargo test
 cargo build --release
 cargo build --release --no-default-features   # tiny, minimal-dependency core
