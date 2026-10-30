@@ -96,7 +96,7 @@ pub fn run(ui: &mut Ui, cfg: &Config, args: &Args, rng: &mut Rng, deadline: Opti
     let renderer = cfg.style.renderer();
     let skin = renderer.skin();
     let mut decks = Decks::new(cfg, rng);
-    renderer.welcome(ui);
+    renderer.boot(ui, cfg, rng);
 
     let speed_factor = cfg.speed.delay_factor();
     let effective_model = cfg.model.as_deref().unwrap_or(skin.model);
@@ -105,6 +105,7 @@ pub fn run(ui: &mut Ui, cfg: &Config, args: &Args, rng: &mut Rng, deadline: Opti
     let mut turns: u32 = 0;
 
     'session: while !crate::expired(deadline) {
+        ui.refresh_width();
         turns += 1;
         let prompt = decks.prompts.next(rng);
         renderer.prompt(ui, prompt);
@@ -203,7 +204,7 @@ pub fn run(ui: &mut Ui, cfg: &Config, args: &Args, rng: &mut Rng, deadline: Opti
 
         if args.alerts && rng.chance(1, 2) {
             ui.blank();
-            renderer.lint_error(ui);
+            renderer.alert(ui, rng);
         }
 
         if !summary.is_empty() {

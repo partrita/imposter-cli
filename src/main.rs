@@ -1,19 +1,18 @@
 mod ansi;
-mod classic;
 mod cli;
 mod config;
 mod content;
-mod hollywood;
+mod engine;
 mod jargon;
 mod rng;
 mod setup;
 mod style;
-mod transcript;
 #[cfg(feature = "tui")]
 mod tui;
 mod types;
 
 use ansi::Ui;
+use engine::{classic_session::ClassicSession, hollywood_session::HollywoodSession, transcript};
 use std::time::{Duration, Instant};
 
 pub fn expired(deadline: Option<Instant>) -> bool {
@@ -43,6 +42,7 @@ fn no_args() -> bool {
 
 fn main() {
     let _ = ctrlc::set_handler(|| {
+        ansi::restore_terminal();
         // Restore cursor, reset ANSI attributes and clean exit immediately
         let mut stdout = std::io::stdout();
         let _ = std::io::Write::write_all(&mut stdout, b"\x1b[?25h\x1b[0m\n");
@@ -91,9 +91,29 @@ fn main() {
         None
     };
 
+    let _raw_guard = ansi::RawModeGuard::new();
+
     match cfg.style {
-        style::Style::Classic => classic::run(&mut ui, &cfg, &args, &mut rng, deadline),
-        style::Style::Hollywood => hollywood::run(&mut ui, &cfg, &args, &mut rng, deadline),
+        style::Style::Hollywood => {
+            engine::run_session(
+                &mut ui,
+                &cfg,
+                &args,
+                &mut rng,
+                deadline,
+                HollywoodSession::new(),
+            );
+        }
+        style::Style::Classic => {
+            engine::run_session(
+                &mut ui,
+                &cfg,
+                &args,
+                &mut rng,
+                deadline,
+                ClassicSession::new(),
+            );
+        }
         _ => transcript::run(&mut ui, &cfg, &args, &mut rng, deadline),
     }
 

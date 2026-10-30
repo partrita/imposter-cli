@@ -210,13 +210,14 @@ impl Renderer for Pi {
         box_line(ui, ansi::PI_TOOL_OK_DIM, ansi::PI_TOOL_OK_BG, text);
     }
 
-    fn lint_error(&self, ui: &mut Ui) {
+    fn alert(&self, ui: &mut Ui, rng: &mut crate::rng::Rng) {
         let cmd = "$ cargo clippy --all-targets -- -D warnings";
         tool_box(ui, cmd, crate::content::LINT_ERROR, true);
         ui.pause(420);
         self.edit(ui, "src/api/handlers.rs", "Removed duplicated branch");
         self.patch(ui, crate::content::LINT_FIX, 54);
         tool_box(ui, cmd, &["0 warnings, 0 errors"], false);
+        let _ = rng;
     }
 
     fn todo(&self, ui: &mut Ui, items: &[&str]) {

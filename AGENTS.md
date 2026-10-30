@@ -12,7 +12,7 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 cargo build --release
-cargo build --release --no-default-features   # tiny, zero-dependency core
+cargo build --release --no-default-features   # tiny, minimal-dependency core
 ```
 
 ## Architecture
@@ -32,7 +32,7 @@ cargo build --release --no-default-features   # tiny, zero-dependency core
 
 ## Conventions
 
-- Keep the core zero-dependency: no `clap`, `serde`, `rand`, `tokio`, etc.
+- Keep dependencies minimal: no `clap`, `serde`, `rand`, `tokio`, etc.
   New runtime crates must be optional and feature-gated.
 - Performance matters: reuse buffers, one `write_all` per line, no threads,
   no alternate screen in normal output mode.

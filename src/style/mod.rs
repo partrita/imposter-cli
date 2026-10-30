@@ -17,6 +17,7 @@ use crate::ansi::{self, SpinnerKind, Ui};
 use crate::content;
 
 pub mod antigravity;
+pub mod classic;
 pub mod claude;
 pub mod codex;
 pub mod hollywood;
@@ -84,12 +85,13 @@ impl Style {
     /// only because the type demands one; its renderer never calls it.
     pub fn renderer(self) -> &'static dyn Renderer {
         match self {
-            Style::Claude | Style::Classic => &claude::CLAUDE,
+            Style::Claude => &claude::CLAUDE,
             Style::Codex => &codex::CODEX,
             Style::Opencode => &opencode::OPENCODE,
             Style::Pi => &pi::PI,
             Style::Antigravity => &antigravity::ANTIGRAVITY,
             Style::Hollywood => &hollywood::HOLLYWOOD,
+            Style::Classic => &classic::CLASSIC,
         }
     }
 }
@@ -144,6 +146,11 @@ pub trait Renderer: Sync {
 
     fn spinner_kind(&self) -> SpinnerKind {
         SpinnerKind::Claude
+    }
+
+    /// Called once at session start before the main loop. Default calls `welcome`.
+    fn boot(&self, ui: &mut Ui, _cfg: &crate::config::Config, _rng: &mut crate::rng::Rng) {
+        self.welcome(ui);
     }
 
     fn welcome(&self, ui: &mut Ui) {
@@ -329,9 +336,25 @@ pub trait Renderer: Sync {
         ]);
     }
 
-    /// A fake lint failure, its fix and the clean re-run. Built from the hooks
-    /// above, so overriding `tool`/`output` is enough for a new style.
-    fn lint_error(&self, ui: &mut Ui) {
+    /// Render a progress bar. `pct` is 0-100. `label` is optional text.
+    /// Default renders a simple `█/░` bar.
+    fn progress_bar(&self, ui: &mut Ui, pct: u32, label: &str) {
+        let width = 24;
+        let filled = (width * pct as usize) / 100;
+        let empty = width - filled;
+        let bar = format!(
+            "[{}{}] {:>3}% {}",
+            "\u{2588}".repeat(filled),
+            "\u{2591}".repeat(empty),
+            pct,
+            label
+        );
+        ui.parts(&[(self.skin().accent, &bar)]);
+    }
+
+    /// Render an alert (error/warning). Called when `cfg.alerts` is true and
+    /// the engine's random check passes. Default renders a clippy-style error.
+    fn alert(&self, ui: &mut Ui, _rng: &mut crate::rng::Rng) {
         let cmd = "cargo clippy --all-targets -- -D warnings";
         self.tool(ui, "Bash", cmd, "");
         for (i, line) in content::LINT_ERROR.iter().enumerate() {

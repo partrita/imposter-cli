@@ -1,9 +1,9 @@
 [package]
 name = "imposter"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 rust-version = "1.88"
-description = "A zero-dependency CLI that fakes a Claude Code session so you look busy. Satire."
+description = "A lightweight CLI that fakes a Claude Code session so you look busy. Satire."
 license = "MIT"
 repository = "https://github.com/partrita/imposter-cli"
 homepage = "https://github.com/partrita/imposter-cli"

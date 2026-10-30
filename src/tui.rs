@@ -12,53 +12,64 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style as TuiStyle};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Tabs, Wrap};
 use ratatui::{Frame, Terminal};
 use std::io::stdout;
 use std::time::Duration;
 
 #[derive(Copy, Clone, PartialEq, Eq)]
-enum Field {
+enum Tab {
+    Main,
+    Settings,
+    About,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum SettingsField {
     Style,
     Model,
     Speed,
     Theme,
     Duration,
-    Start,
     Save,
 }
 
-const FIELDS: [Field; 7] = [
-    Field::Style,
-    Field::Model,
-    Field::Speed,
-    Field::Theme,
-    Field::Duration,
-    Field::Start,
-    Field::Save,
+const SETTINGS_FIELDS: [SettingsField; 6] = [
+    SettingsField::Style,
+    SettingsField::Model,
+    SettingsField::Speed,
+    SettingsField::Theme,
+    SettingsField::Duration,
+    SettingsField::Save,
 ];
 
-impl Field {
+impl SettingsField {
     fn label(self) -> &'static str {
         match self {
-            Field::Style => "Style",
-            Field::Model => "Model",
-            Field::Speed => "Speed",
-            Field::Theme => "Theme",
-            Field::Duration => "Duration",
-            Field::Start => "",
-            Field::Save => "",
+            SettingsField::Style => "Style",
+            SettingsField::Model => "Model",
+            SettingsField::Speed => "Speed",
+            SettingsField::Theme => "Theme",
+            SettingsField::Duration => "Duration",
+            SettingsField::Save => "",
         }
     }
 
     #[allow(dead_code)]
     fn editable(self) -> bool {
-        matches!(self, Field::Duration | Field::Model)
+        matches!(self, SettingsField::Duration | SettingsField::Model)
     }
 }
+
+const IMPOSTER_BANNER: &[&str] = &[
+    r" ___ __  __ ___  ___  ____ _____ ___  ____  ",
+    r"|_ _|  \/  | _ \/ _ \/ ___|_   _/ _ \|  _ \ ",
+    r" | || |\/| |  _/ (_) \___ \ | || (_) | |_) |",
+    r"|___|_|  |_|_|  \___/|____/ |_| \___/|_| \_\",
+];
 
 struct Palette {
     bg: Color,
@@ -74,24 +85,28 @@ struct Palette {
 
 struct App {
     cfg: Config,
-    field: usize,
+    active_tab: Tab,
+    settings_field: usize,
     editing: bool,
     buf: String,
     status: Option<String>,
     start: bool,
     quit: bool,
+    tick: usize,
 }
 
 impl App {
     fn new(cfg: Config) -> Self {
         Self {
             cfg,
-            field: 0,
+            active_tab: Tab::Main,
+            settings_field: 0,
             editing: false,
             buf: String::new(),
             status: None,
             start: false,
             quit: false,
+            tick: 0,
         }
     }
 
@@ -159,11 +174,13 @@ impl App {
                     self.buf.pop();
                 }
                 KeyCode::Char(c) => {
-                    if FIELDS[self.field] == Field::Duration {
+                    if SETTINGS_FIELDS[self.settings_field] == SettingsField::Duration {
                         if c.is_ascii_digit() && self.buf.len() < 3 {
                             self.buf.push(c);
                         }
-                    } else if FIELDS[self.field] == Field::Model && self.buf.len() < 32 {
+                    } else if SETTINGS_FIELDS[self.settings_field] == SettingsField::Model
+                        && self.buf.len() < 32
+                    {
                         self.buf.push(c);
                     }
                 }
@@ -176,98 +193,144 @@ impl App {
 
         match code {
             KeyCode::Esc | KeyCode::Char('q') => self.quit = true,
-            KeyCode::Up | KeyCode::BackTab | KeyCode::Char('k') => {
-                self.field = (self.field + FIELDS.len() - 1) % FIELDS.len();
+            KeyCode::Char('\t') | KeyCode::BackTab => {
+                self.active_tab = match self.active_tab {
+                    Tab::Main => Tab::Settings,
+                    Tab::Settings => Tab::About,
+                    Tab::About => Tab::Main,
+                };
             }
-            KeyCode::Down | KeyCode::Tab | KeyCode::Char('j') => {
-                self.field = (self.field + 1) % FIELDS.len();
-            }
-            KeyCode::Left | KeyCode::Char('h') => {
-                if FIELDS[self.field] == Field::Save {
-                    self.field = FIELDS.iter().position(|f| *f == Field::Start).unwrap_or(0);
-                } else {
-                    self.cycle(-1);
-                }
-            }
-            KeyCode::Right | KeyCode::Char('l') => {
-                if FIELDS[self.field] == Field::Start {
-                    self.field = FIELDS.iter().position(|f| *f == Field::Save).unwrap_or(0);
-                } else {
-                    self.cycle(1);
-                }
-            }
-            KeyCode::Char(' ') => match FIELDS[self.field] {
-                Field::Start => self.start = true,
-                Field::Save => self.save(),
-                _ => self.cycle(1),
+            KeyCode::Char('1') => self.active_tab = Tab::Main,
+            KeyCode::Char('2') => self.active_tab = Tab::Settings,
+            KeyCode::Char('3') => self.active_tab = Tab::About,
+            _ => match self.active_tab {
+                Tab::Main => match code {
+                    KeyCode::Enter | KeyCode::Char(' ') => self.start = true,
+                    KeyCode::Right | KeyCode::Char('l') => self.active_tab = Tab::Settings,
+                    _ => {}
+                },
+                Tab::Settings => match code {
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        self.settings_field = (self.settings_field + SETTINGS_FIELDS.len() - 1)
+                            % SETTINGS_FIELDS.len();
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        self.settings_field = (self.settings_field + 1) % SETTINGS_FIELDS.len();
+                    }
+                    KeyCode::Left | KeyCode::Char('h') => {
+                        if SETTINGS_FIELDS[self.settings_field] != SettingsField::Save {
+                            self.cycle(-1);
+                        } else {
+                            self.active_tab = Tab::Main;
+                        }
+                    }
+                    KeyCode::Right | KeyCode::Char('l') => {
+                        if SETTINGS_FIELDS[self.settings_field] != SettingsField::Save {
+                            self.cycle(1);
+                        } else {
+                            self.active_tab = Tab::About;
+                        }
+                    }
+                    KeyCode::Char(' ') => {
+                        if SETTINGS_FIELDS[self.settings_field] == SettingsField::Save {
+                            self.save();
+                        } else {
+                            self.cycle(1);
+                        }
+                    }
+                    KeyCode::Char('t') => {
+                        self.cfg.theme = cycle(&Theme::ALL, self.cfg.theme, 1);
+                    }
+                    KeyCode::Char('s') => self.save(),
+                    KeyCode::Enter => match SETTINGS_FIELDS[self.settings_field] {
+                        SettingsField::Save => self.save(),
+                        SettingsField::Duration => {
+                            self.buf = self.cfg.duration.to_string();
+                            self.editing = true;
+                        }
+                        SettingsField::Model => {
+                            self.buf = self.cfg.model.clone().unwrap_or_default();
+                            self.editing = true;
+                        }
+                        _ => self.cycle(1),
+                    },
+                    _ => {}
+                },
+                Tab::About => match code {
+                    KeyCode::Left | KeyCode::Char('h') => self.active_tab = Tab::Settings,
+                    KeyCode::Right | KeyCode::Char('l') => self.active_tab = Tab::Main,
+                    KeyCode::Enter | KeyCode::Char(' ') => self.start = true,
+                    _ => {}
+                },
             },
-            KeyCode::Char('t') => {
-                self.cfg.theme = cycle(&Theme::ALL, self.cfg.theme, 1);
-            }
-            KeyCode::Char('s') => self.save(),
-            KeyCode::Enter => match FIELDS[self.field] {
-                Field::Start => self.start = true,
-                Field::Save => self.save(),
-                Field::Duration => {
-                    self.buf = self.cfg.duration.to_string();
-                    self.editing = true;
-                }
-                Field::Model => {
-                    self.buf = self.cfg.model.clone().unwrap_or_default();
-                    self.editing = true;
-                }
-                _ => self.cycle(1),
-            },
-            _ => {}
         }
     }
 
-    fn mouse_click(&mut self, _col: u16, row: u16) {
-        // Form region: row 1..=5 for the 5 config fields (inside Configuration block)
-        if (1..=5).contains(&row) {
-            let clicked_field = (row - 1) as usize;
-            if clicked_field < 5 {
-                if self.field == clicked_field {
-                    if FIELDS[self.field].editable() {
-                        if FIELDS[self.field] == Field::Duration {
-                            self.buf = self.cfg.duration.to_string();
-                        } else {
-                            self.buf = self.cfg.model.clone().unwrap_or_default();
-                        }
-                        self.editing = true;
-                    } else {
-                        self.cycle(1);
-                    }
-                } else {
-                    self.field = clicked_field;
-                }
-                return;
+    fn mouse_click(&mut self, col: u16, row: u16) {
+        // Tab bar click (row 1 or 2)
+        if row <= 2 {
+            if col < 14 {
+                self.active_tab = Tab::Main;
+            } else if col < 30 {
+                self.active_tab = Tab::Settings;
+            } else if col < 44 {
+                self.active_tab = Tab::About;
             }
+            return;
         }
 
-        // Action block region
-        if row >= 11 {
-            if row == 12 {
-                self.field = FIELDS.iter().position(|f| *f == Field::Start).unwrap_or(0);
-                self.start = true;
-            } else if row == 13 {
-                self.field = FIELDS.iter().position(|f| *f == Field::Save).unwrap_or(0);
-                self.save();
+        match self.active_tab {
+            Tab::Main => {
+                // START button is roughly in rows 9..=15
+                if (9..=16).contains(&row) {
+                    self.start = true;
+                }
             }
+            Tab::Settings => {
+                // Settings items in row 4..=9
+                if (4..=8).contains(&row) {
+                    let clicked = (row - 4) as usize;
+                    if clicked < 5 {
+                        if self.settings_field == clicked {
+                            if SETTINGS_FIELDS[self.settings_field].editable() {
+                                if SETTINGS_FIELDS[self.settings_field] == SettingsField::Duration {
+                                    self.buf = self.cfg.duration.to_string();
+                                } else {
+                                    self.buf = self.cfg.model.clone().unwrap_or_default();
+                                }
+                                self.editing = true;
+                            } else {
+                                self.cycle(1);
+                            }
+                        } else {
+                            self.settings_field = clicked;
+                        }
+                    }
+                } else if (12..=15).contains(&row) {
+                    self.settings_field = SETTINGS_FIELDS
+                        .iter()
+                        .position(|f| *f == SettingsField::Save)
+                        .unwrap_or(0);
+                    self.save();
+                }
+            }
+            Tab::About => {}
         }
     }
 
     fn cycle(&mut self, dir: i32) {
-        match FIELDS[self.field] {
-            Field::Style => self.cfg.style = cycle(&Style::ALL, self.cfg.style, dir),
-            Field::Model => {
+        match SETTINGS_FIELDS[self.settings_field] {
+            SettingsField::Style => self.cfg.style = cycle(&Style::ALL, self.cfg.style, dir),
+            SettingsField::Model => {
                 if self.cfg.model.is_some() {
                     self.cfg.model = None;
                 }
             }
-            Field::Speed => self.cfg.speed = cycle(&crate::types::Speed::ALL, self.cfg.speed, dir),
-            Field::Theme => self.cfg.theme = cycle(&Theme::ALL, self.cfg.theme, dir),
-            Field::Duration => {
+            SettingsField::Speed => {
+                self.cfg.speed = cycle(&crate::types::Speed::ALL, self.cfg.speed, dir)
+            }
+            SettingsField::Theme => self.cfg.theme = cycle(&Theme::ALL, self.cfg.theme, dir),
+            SettingsField::Duration => {
                 let step = 5i64;
                 let next = self.cfg.duration as i64 + if dir > 0 { step } else { -step };
                 self.cfg.duration = next.clamp(0, crate::cli::MAX_MINUTES as i64) as u64;
@@ -277,11 +340,11 @@ impl App {
     }
 
     fn commit_edit(&mut self) {
-        if FIELDS[self.field] == Field::Duration {
+        if SETTINGS_FIELDS[self.settings_field] == SettingsField::Duration {
             if let Ok(v) = self.buf.trim().parse::<u64>() {
                 self.cfg.duration = v.min(crate::cli::MAX_MINUTES);
             }
-        } else if FIELDS[self.field] == Field::Model {
+        } else if SETTINGS_FIELDS[self.settings_field] == SettingsField::Model {
             let trimmed = self.buf.trim();
             if trimmed.is_empty() {
                 self.cfg.model = None;
@@ -308,38 +371,335 @@ impl App {
             f.render_widget(bg_block, area);
         }
 
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(14), Constraint::Length(2)])
-            .split(area);
-        let cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(46), Constraint::Percentage(54)])
-            .split(rows[0]);
+        // Terminal too small check
+        if area.width < 45 || area.height < 12 {
+            let warn_lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "⚠️  Terminal Too Small",
+                    TuiStyle::default()
+                        .fg(pal.accent)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("Current: {}x{}", area.width, area.height),
+                    TuiStyle::default().fg(pal.muted),
+                )),
+                Line::from(Span::styled(
+                    "Min required: 45x12",
+                    TuiStyle::default().fg(pal.dim),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Please resize terminal window",
+                    TuiStyle::default().fg(pal.fg),
+                )),
+            ];
+            let warn_block = Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Double)
+                .border_style(TuiStyle::default().fg(pal.accent));
+            f.render_widget(
+                Paragraph::new(warn_lines)
+                    .alignment(Alignment::Center)
+                    .block(warn_block),
+                area,
+            );
+            return;
+        }
 
-        self.draw_left_column(f, cols[0], &pal);
-        self.draw_preview(f, cols[1], &pal);
-        self.draw_footer(f, rows[1], &pal);
+        let main_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3), // BIOS Header + Tab bar
+                Constraint::Min(6),    // Tab content
+                Constraint::Length(2), // Status & Footer
+            ])
+            .split(area);
+
+        self.draw_tabs(f, main_layout[0], &pal);
+
+        match self.active_tab {
+            Tab::Main => self.draw_main_tab(f, main_layout[1], &pal),
+            Tab::Settings => self.draw_settings_tab(f, main_layout[1], &pal),
+            Tab::About => self.draw_about_tab(f, main_layout[1], &pal),
+        }
+
+        self.draw_footer(f, main_layout[2], &pal);
     }
 
-    fn draw_left_column(&self, f: &mut Frame, area: Rect, pal: &Palette) {
-        let left_rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(11), Constraint::Length(6)])
-            .split(area);
+    fn draw_tabs(&self, f: &mut Frame, area: Rect, pal: &Palette) {
+        let titles = vec![
+            Line::from(" [1] MAIN "),
+            Line::from(" [2] SETTINGS "),
+            Line::from(" [3] ABOUT "),
+        ];
 
-        self.draw_form(f, left_rows[0], pal);
-        self.draw_actions(f, left_rows[1], pal);
+        let selected_idx = match self.active_tab {
+            Tab::Main => 0,
+            Tab::Settings => 1,
+            Tab::About => 2,
+        };
+
+        let tabs = Tabs::new(titles)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Double)
+                    .border_style(TuiStyle::default().fg(pal.border))
+                    .title(Span::styled(
+                        " IMPOSTER ",
+                        TuiStyle::default()
+                            .fg(pal.accent)
+                            .add_modifier(Modifier::BOLD),
+                    )),
+            )
+            .select(selected_idx)
+            .style(TuiStyle::default().fg(pal.muted))
+            .highlight_style(
+                TuiStyle::default()
+                    .fg(pal.badge_fg)
+                    .bg(pal.accent)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .divider(Span::styled("│", TuiStyle::default().fg(pal.dim)));
+
+        f.render_widget(tabs, area);
     }
 
-    fn draw_form(&self, f: &mut Frame, area: Rect, pal: &Palette) {
+    fn draw_main_tab(&self, f: &mut Frame, area: Rect, pal: &Palette) {
+        let (base_r, base_g, base_b) = if self.cfg.style == Style::Classic {
+            match self.cfg.theme {
+                Theme::Dark => (80u8, 200u8, 120u8),
+                Theme::Light => (17u8, 99u8, 41u8),
+            }
+        } else {
+            self.cfg.style.skin().rgb_for(self.cfg.theme)
+        };
+
+        let mut lines = Vec::new();
+        lines.push(Line::from(""));
+
+        // If terminal width is tight or height is small, use compact banner
+        let is_compact = area.width < 62 || area.height < 16;
+        if is_compact {
+            lines.push(Line::from(Span::styled(
+                "═══  I M P O S T E R  ═══",
+                TuiStyle::default()
+                    .fg(pal.accent)
+                    .add_modifier(Modifier::BOLD),
+            )));
+        } else {
+            for (row_idx, line) in IMPOSTER_BANNER.iter().enumerate() {
+                let mut spans = Vec::new();
+                for (col_idx, ch) in line.chars().enumerate() {
+                    // Wave phase combines column position, row offset, and tick counter
+                    let phase = ((col_idx * 4 + row_idx * 12 + self.tick * 8) % 360) as f32;
+                    let rad = phase * std::f32::consts::PI / 180.0;
+                    let sin_val = (rad.sin() + 1.0) / 2.0; // 0.0 ..= 1.0
+
+                    // Interpolate brightness/glow around the base accent color
+                    let factor = 0.55 + 0.65 * sin_val; // 0.55 ..= 1.20
+                    let r = ((base_r as f32 * factor).min(255.0)) as u8;
+                    let g = ((base_g as f32 * factor).min(255.0)) as u8;
+                    let b = ((base_b as f32 * factor).min(255.0)) as u8;
+
+                    spans.push(Span::styled(
+                        ch.to_string(),
+                        TuiStyle::default()
+                            .fg(Color::Rgb(r, g, b))
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                }
+                lines.push(Line::from(spans));
+            }
+        }
+
+        if !is_compact {
+            lines.push(Line::from(""));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "╔═══════════════════════════════════════════════╗",
+            TuiStyle::default().fg(pal.accent),
+        )));
+        lines.push(Line::from(Span::styled(
+            "║               ▶  S T A R T  ◀                 ║",
+            TuiStyle::default()
+                .fg(pal.badge_fg)
+                .bg(pal.accent)
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            "╚═══════════════════════════════════════════════╝",
+            TuiStyle::default().fg(pal.accent),
+        )));
+        lines.push(Line::from(Span::styled(
+            "Press [Enter] or [Space] to Start",
+            TuiStyle::default()
+                .fg(pal.dim)
+                .add_modifier(Modifier::ITALIC),
+        )));
+
+        let main_block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Double)
+            .border_style(TuiStyle::default().fg(pal.border));
+
+        f.render_widget(
+            Paragraph::new(lines)
+                .alignment(Alignment::Center)
+                .block(main_block),
+            area,
+        );
+    }
+
+    fn draw_about_tab(&self, f: &mut Frame, area: Rect, pal: &Palette) {
+        let lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "imposter",
+                TuiStyle::default()
+                    .fg(pal.accent)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                "\"아무것도 하지 않으면서, 최신 AI 코딩 에이전트로 바이브 코딩하는 척하기\"",
+                TuiStyle::default().fg(pal.fg).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Author  : ", TuiStyle::default().fg(pal.muted)),
+                Span::styled("deepthought", TuiStyle::default().fg(pal.accent)),
+            ]),
+            Line::from(vec![
+                Span::styled("Source  : ", TuiStyle::default().fg(pal.muted)),
+                Span::styled(
+                    "https://github.com/partrita/imposter-cli",
+                    TuiStyle::default().fg(pal.fg),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("Original: ", TuiStyle::default().fg(pal.dim)),
+                Span::styled(
+                    "https://github.com/giacomo-b/rust-stakeholder",
+                    TuiStyle::default().fg(pal.dim),
+                ),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                "─── USAGE & SHORTCUTS ───",
+                TuiStyle::default()
+                    .fg(pal.accent)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(vec![
+                Span::styled(
+                    "  imposter           ",
+                    TuiStyle::default().fg(pal.fg).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    ": 대화형 TUI 설정 마법사 실행",
+                    TuiStyle::default().fg(pal.muted),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled(
+                    "  imposter -c        ",
+                    TuiStyle::default().fg(pal.fg).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    ": 저장된 설정으로 바로 세션 실행",
+                    TuiStyle::default().fg(pal.muted),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled(
+                    "  imposter -s codex  ",
+                    TuiStyle::default().fg(pal.fg).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    ": 지정한 스타일로 세션 직접 실행",
+                    TuiStyle::default().fg(pal.muted),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled(
+                    "  Ctrl+C / Esc       ",
+                    TuiStyle::default()
+                        .fg(pal.accent)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    ": 세션 실행 중 언제든 즉시 종료",
+                    TuiStyle::default().fg(pal.muted),
+                ),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Minimal dependencies · Single-threaded · Zero token cost",
+                TuiStyle::default().fg(pal.dim),
+            )),
+        ];
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Double)
+            .border_style(TuiStyle::default().fg(pal.border))
+            .style(TuiStyle::default().bg(pal.bg).fg(pal.fg))
+            .title(Span::styled(
+                " About ",
+                TuiStyle::default()
+                    .fg(pal.accent)
+                    .add_modifier(Modifier::BOLD),
+            ));
+
+        f.render_widget(
+            Paragraph::new(lines)
+                .alignment(Alignment::Center)
+                .block(block)
+                .wrap(Wrap { trim: false }),
+            area,
+        );
+    }
+
+    fn draw_settings_tab(&self, f: &mut Frame, area: Rect, pal: &Palette) {
+        if area.width < 75 {
+            // Narrow responsive layout: single vertical column
+            let rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(10), Constraint::Length(5)])
+                .split(area);
+
+            self.draw_settings_form(f, rows[0], pal);
+            self.draw_settings_actions(f, rows[1], pal);
+        } else {
+            // Wide layout: 2-column (form + preview)
+            let cols = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(46), Constraint::Percentage(54)])
+                .split(area);
+
+            let left_rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(11), Constraint::Length(5)])
+                .split(cols[0]);
+
+            self.draw_settings_form(f, left_rows[0], pal);
+            self.draw_settings_actions(f, left_rows[1], pal);
+            self.draw_preview(f, cols[1], pal);
+        }
+    }
+
+    fn draw_settings_form(&self, f: &mut Frame, area: Rect, pal: &Palette) {
         let mut lines: Vec<Line> = Vec::with_capacity(10);
 
-        for (i, field) in FIELDS.iter().enumerate() {
-            if matches!(field, Field::Start | Field::Save) {
+        for (i, field) in SETTINGS_FIELDS.iter().enumerate() {
+            if *field == SettingsField::Save {
                 continue;
             }
-            let selected = i == self.field;
+            let selected = i == self.settings_field;
             let pointer = if selected { " \u{276f} " } else { "   " };
             let label_style = if selected {
                 TuiStyle::default()
@@ -359,7 +719,7 @@ impl App {
 
         lines.push(Line::from(""));
         let dim = TuiStyle::default().fg(pal.dim);
-        let (_, desc_body) = self.field_description(FIELDS[self.field]);
+        let (_, desc_body) = self.field_description(SETTINGS_FIELDS[self.settings_field]);
         lines.push(Line::from(vec![
             Span::styled("   \u{00bb} ", TuiStyle::default().fg(pal.accent)),
             Span::styled(desc_body, dim),
@@ -367,11 +727,11 @@ impl App {
 
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
+            .border_type(BorderType::Double)
             .border_style(TuiStyle::default().fg(pal.border))
             .style(TuiStyle::default().bg(pal.bg).fg(pal.fg))
             .title(Span::styled(
-                " Configuration ",
+                " Settings ",
                 TuiStyle::default()
                     .fg(pal.accent)
                     .add_modifier(Modifier::BOLD),
@@ -384,63 +744,40 @@ impl App {
         );
     }
 
-    fn draw_actions(&self, f: &mut Frame, area: Rect, pal: &Palette) {
-        let start_sel = FIELDS[self.field] == Field::Start;
-        let save_sel = FIELDS[self.field] == Field::Save;
+    fn draw_settings_actions(&self, f: &mut Frame, area: Rect, pal: &Palette) {
+        let save_sel = SETTINGS_FIELDS[self.settings_field] == SettingsField::Save;
 
-        let start_style = if start_sel {
+        let save_style = if save_sel {
             TuiStyle::default()
                 .fg(pal.badge_fg)
                 .bg(pal.accent)
                 .add_modifier(Modifier::BOLD)
         } else {
-            TuiStyle::default()
-                .fg(pal.accent)
-                .add_modifier(Modifier::BOLD)
+            TuiStyle::default().fg(pal.fg).add_modifier(Modifier::BOLD)
         };
 
-        let save_style = if save_sel {
-            TuiStyle::default()
-                .fg(pal.badge_fg)
-                .bg(pal.fg)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            TuiStyle::default().fg(pal.muted)
-        };
-
-        let start_cursor = if start_sel { "\u{25b6} " } else { "  " };
         let save_cursor = if save_sel { "\u{25b6} " } else { "  " };
 
         let lines = vec![
-            Line::from(vec![
-                Span::styled(
-                    format!(" {start_cursor}"),
-                    TuiStyle::default().fg(pal.accent),
-                ),
-                Span::styled(" \u{25b6} START SESSION (Enter) ", start_style),
-            ]),
+            Line::from(""),
             Line::from(vec![
                 Span::styled(
                     format!(" {save_cursor}"),
                     TuiStyle::default().fg(pal.accent),
                 ),
-                Span::styled(" \u{2713} Save Defaults ", save_style),
+                Span::styled(" [ SAVE CONFIGURATION (Enter) ] ", save_style),
             ]),
         ];
 
-        let action_border_color = if start_sel || save_sel {
-            pal.accent
-        } else {
-            pal.border
-        };
+        let action_border_color = if save_sel { pal.accent } else { pal.border };
 
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
+            .border_type(BorderType::Double)
             .border_style(TuiStyle::default().fg(action_border_color))
             .style(TuiStyle::default().bg(pal.bg).fg(pal.fg))
             .title(Span::styled(
-                " Actions ",
+                " Save ",
                 TuiStyle::default()
                     .fg(pal.accent)
                     .add_modifier(Modifier::BOLD),
@@ -451,7 +788,7 @@ impl App {
 
     fn render_field_value(
         &self,
-        field: Field,
+        field: SettingsField,
         selected: bool,
         pal: &Palette,
     ) -> Vec<Span<'static>> {
@@ -470,7 +807,7 @@ impl App {
         let dim = TuiStyle::default().fg(pal.dim);
 
         match field {
-            Field::Style => {
+            SettingsField::Style => {
                 let idx = Style::ALL
                     .iter()
                     .position(|s| *s == self.cfg.style)
@@ -483,7 +820,7 @@ impl App {
                     Span::styled(format!("({idx}/{})", Style::ALL.len()), dim),
                 ]
             }
-            Field::Model => {
+            SettingsField::Model => {
                 if self.editing && selected {
                     return vec![
                         Span::styled(
@@ -504,7 +841,7 @@ impl App {
                     Span::styled("(Enter to edit)", dim),
                 ]
             }
-            Field::Speed => {
+            SettingsField::Speed => {
                 let idx = crate::types::Speed::ALL
                     .iter()
                     .position(|s| *s == self.cfg.speed)
@@ -517,7 +854,7 @@ impl App {
                     Span::styled(format!("({idx}/{})", crate::types::Speed::ALL.len()), dim),
                 ]
             }
-            Field::Theme => {
+            SettingsField::Theme => {
                 let dark_active = self.cfg.theme == Theme::Dark;
                 let active_style = TuiStyle::default()
                     .fg(pal.accent)
@@ -537,7 +874,7 @@ impl App {
                     ]
                 }
             }
-            Field::Duration => {
+            SettingsField::Duration => {
                 if self.editing && selected {
                     return vec![
                         Span::styled(
@@ -561,13 +898,13 @@ impl App {
                     Span::styled("(\u{2190}/\u{2192} \u{00b1}5m, Enter type)", dim),
                 ]
             }
-            Field::Start | Field::Save => Vec::new(),
+            SettingsField::Save => Vec::new(),
         }
     }
 
-    fn field_description(&self, field: Field) -> (&'static str, String) {
+    fn field_description(&self, field: SettingsField) -> (&'static str, String) {
         match field {
-            Field::Style => {
+            SettingsField::Style => {
                 let desc = match self.cfg.style {
                     Style::Claude => "Anthropic Claude Code v2.1: Clawd banner, \u{276f} prompt, \u{25cf} tools & \u{23bf} tree output.",
                     Style::Classic => "Legacy stakeholder system log: progress bars, symbol linker & p99 metrics.",
@@ -579,31 +916,26 @@ impl App {
                 };
                 ("Active CLI Persona", desc.to_string())
             }
-            Field::Model => (
+            SettingsField::Model => (
                 "AI Model Designation",
                 "Custom model name (e.g. claude-3-7-sonnet, gpt-4o, gemini-2.5-pro). Leave empty for style default."
                     .to_string(),
             ),
-            Field::Speed => (
+            SettingsField::Speed => (
                 "Transcript Playback Speed",
                 "Slow (0.5x), Normal (1.0x), Fast (2.0x), Turbo (5.0x) with natural jitter variations."
                     .to_string(),
             ),
-            Field::Theme => (
+            SettingsField::Theme => (
                 "Color Theme (Dark / Light)",
                 "Adapts accent, text, border, and diff contrast for dark or light terminals (shortcut: t)."
                     .to_string(),
             ),
-            Field::Duration => (
+            SettingsField::Duration => (
                 "Auto-Stop Timer",
                 "0 runs until Ctrl-C. Set 1-999 minutes to exit cleanly on a deadline.".to_string(),
             ),
-            Field::Start => (
-                "Launch Session",
-                "Press Enter, Space, or Ctrl+R to exit setup and start the fake session."
-                    .to_string(),
-            ),
-            Field::Save => (
+            SettingsField::Save => (
                 "Persist Defaults",
                 "Writes current settings to ~/.config/imposter/config.toml.".to_string(),
             ),
@@ -1074,25 +1406,43 @@ impl App {
                 keycap("Backspace", accent),
                 Span::raw(" Delete   "),
                 keycap("Esc", accent),
-                Span::raw(" Cancel editing"),
+                Span::raw(" Cancel"),
             ])
         } else {
-            Line::from(vec![
-                keycap("\u{2191}\u{2193}/Tab", accent),
-                Span::raw(" Move  "),
-                keycap("\u{2190}\u{2192}/Space", accent),
-                Span::raw(" Cycle  "),
-                keycap("Enter", accent),
-                Span::raw(" Edit  "),
-                keycap("t", accent),
-                Span::raw(" Theme  "),
-                keycap("Ctrl+R", accent),
-                Span::raw(" Start  "),
-                keycap("Ctrl+S", accent),
-                Span::raw(" Save  "),
-                keycap("q/Esc", accent),
-                Span::raw(" Quit"),
-            ])
+            match self.active_tab {
+                Tab::Main => Line::from(vec![
+                    keycap("Enter/Space", accent),
+                    Span::raw(" Start  "),
+                    keycap("Tab", accent),
+                    Span::raw(" Next Tab  "),
+                    keycap("q / Esc", accent),
+                    Span::raw(" Quit"),
+                ]),
+                Tab::Settings => Line::from(vec![
+                    keycap("\u{2191}\u{2193}/j,k", accent),
+                    Span::raw(" Select  "),
+                    keycap("\u{2190}\u{2192}/Space", accent),
+                    Span::raw(" Cycle  "),
+                    keycap("Enter", accent),
+                    Span::raw(" Edit/Save  "),
+                    keycap("t", accent),
+                    Span::raw(" Theme  "),
+                    keycap("Ctrl+S", accent),
+                    Span::raw(" Save  "),
+                    keycap("Tab", accent),
+                    Span::raw(" Next Tab  "),
+                    keycap("q/Esc", accent),
+                    Span::raw(" Quit"),
+                ]),
+                Tab::About => Line::from(vec![
+                    keycap("Enter/Space", accent),
+                    Span::raw(" Start  "),
+                    keycap("Tab", accent),
+                    Span::raw(" Next Tab  "),
+                    keycap("q / Esc", accent),
+                    Span::raw(" Quit"),
+                ]),
+            }
         };
 
         let help = Block::default()
@@ -1160,10 +1510,11 @@ pub fn run(cfg: Config) -> Option<Config> {
     let mut result: Option<Config> = None;
 
     loop {
+        app.tick = app.tick.wrapping_add(1);
         if terminal.draw(|f| app.draw(f)).is_err() {
             break;
         }
-        match event::poll(Duration::from_millis(120)) {
+        match event::poll(Duration::from_millis(80)) {
             Ok(true) => {}
             Ok(false) => continue,
             Err(_) => break,

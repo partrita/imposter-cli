@@ -101,6 +101,216 @@ pub fn enable_ansi() {
 #[inline]
 pub fn enable_ansi() {}
 
+#[cfg(unix)]
+mod raw_input {
+    use std::io::{self, IsTerminal};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Termios {
+        c_iflag: u32,
+        c_oflag: u32,
+        c_cflag: u32,
+        c_lflag: u32,
+        c_line: u8,
+        c_cc: [u8; 32],
+        c_ispeed: u32,
+        c_ospeed: u32,
+    }
+
+    const TCSANOW: i32 = 0;
+    const ICANON: u32 = 0o000002;
+    const ECHO: u32 = 0o000010;
+    const VMIN: usize = 6;
+    const VTIME: usize = 5;
+
+    #[link(name = "c")]
+    extern "C" {
+        fn tcgetattr(fd: i32, termios_p: *mut Termios) -> i32;
+        fn tcsetattr(fd: i32, optional_actions: i32, termios_p: *const Termios) -> i32;
+        #[link_name = "read"]
+        fn libc_read(fd: i32, buf: *mut std::ffi::c_void, count: usize) -> isize;
+    }
+
+    static HAS_ORIG: AtomicBool = AtomicBool::new(false);
+    static mut ORIG_TERMIOS: Option<Termios> = None;
+
+    pub struct RawModeGuard {
+        active: bool,
+    }
+
+    impl RawModeGuard {
+        pub fn new() -> Self {
+            if !io::stdin().is_terminal() {
+                return Self { active: false };
+            }
+            let mut orig = std::mem::MaybeUninit::<Termios>::uninit();
+            if unsafe { tcgetattr(0, orig.as_mut_ptr()) } != 0 {
+                return Self { active: false };
+            }
+            let orig = unsafe { orig.assume_init() };
+            unsafe {
+                ORIG_TERMIOS = Some(orig);
+                HAS_ORIG.store(true, Ordering::SeqCst);
+            }
+
+            let mut raw = orig;
+            raw.c_lflag &= !(ICANON | ECHO);
+            raw.c_cc[VMIN] = 0;
+            raw.c_cc[VTIME] = 0;
+            let ok = unsafe { tcsetattr(0, TCSANOW, &raw) } == 0;
+            Self { active: ok }
+        }
+    }
+
+    impl Drop for RawModeGuard {
+        fn drop(&mut self) {
+            if self.active {
+                restore_terminal();
+            }
+        }
+    }
+
+    pub fn restore_terminal() {
+        if HAS_ORIG.swap(false, Ordering::SeqCst) {
+            if let Some(orig) = unsafe { ORIG_TERMIOS } {
+                unsafe {
+                    tcsetattr(0, TCSANOW, &orig);
+                }
+            }
+        }
+    }
+
+    pub fn check_esc() -> bool {
+        let mut buf = [0u8; 32];
+        let n = unsafe { libc_read(0, buf.as_mut_ptr() as *mut std::ffi::c_void, buf.len()) };
+        if n > 0 {
+            let slice = &buf[..n as usize];
+            return slice.contains(&0x1b);
+        }
+        false
+    }
+}
+
+#[cfg(windows)]
+mod raw_input {
+    use std::ffi::c_void;
+    use std::io::{self, IsTerminal};
+    use std::os::windows::io::AsRawHandle;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[repr(C)]
+    struct InputRecord {
+        event_type: u16,
+        _pad: u16,
+        key_event: KeyEventRecord,
+    }
+
+    #[repr(C)]
+    struct KeyEventRecord {
+        key_down: i32,
+        repeat_count: u16,
+        virtual_key_code: u16,
+        virtual_scan_code: u16,
+        u_char: u16,
+        control_key_state: u32,
+    }
+
+    const ENABLE_PROCESSED_INPUT: u32 = 0x0001;
+    const ENABLE_LINE_INPUT: u32 = 0x0002;
+    const ENABLE_ECHO_INPUT: u32 = 0x0004;
+    const KEY_EVENT: u16 = 0x0001;
+    const VK_ESCAPE: u16 = 0x1B;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetConsoleMode(handle: *mut c_void, mode: *mut u32) -> i32;
+        fn SetConsoleMode(handle: *mut c_void, mode: u32) -> i32;
+        fn PeekConsoleInputW(
+            handle: *mut c_void,
+            buffer: *mut InputRecord,
+            length: u32,
+            events_read: *mut u32,
+        ) -> i32;
+        fn ReadConsoleInputW(
+            handle: *mut c_void,
+            buffer: *mut InputRecord,
+            length: u32,
+            events_read: *mut u32,
+        ) -> i32;
+    }
+
+    static HAS_ORIG: AtomicBool = AtomicBool::new(false);
+    static mut ORIG_MODE: u32 = 0;
+
+    pub struct RawModeGuard {
+        active: bool,
+    }
+
+    impl RawModeGuard {
+        pub fn new() -> Self {
+            if !io::stdin().is_terminal() {
+                return Self { active: false };
+            }
+            let handle = io::stdin().as_raw_handle();
+            let mut mode = 0u32;
+            if unsafe { GetConsoleMode(handle, &mut mode) } == 0 {
+                return Self { active: false };
+            }
+            unsafe {
+                ORIG_MODE = mode;
+                HAS_ORIG.store(true, Ordering::SeqCst);
+            }
+            let raw_mode = mode & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT);
+            let ok = unsafe { SetConsoleMode(handle, raw_mode) } != 0;
+            Self { active: ok }
+        }
+    }
+
+    impl Drop for RawModeGuard {
+        fn drop(&mut self) {
+            if self.active {
+                restore_terminal();
+            }
+        }
+    }
+
+    pub fn restore_terminal() {
+        if HAS_ORIG.swap(false, Ordering::SeqCst) {
+            let handle = io::stdin().as_raw_handle();
+            unsafe {
+                SetConsoleMode(handle, ORIG_MODE);
+            }
+        }
+    }
+
+    pub fn check_esc() -> bool {
+        let handle = io::stdin().as_raw_handle();
+        let mut records: [InputRecord; 16] = unsafe { std::mem::zeroed() };
+        let mut read = 0u32;
+        if unsafe { PeekConsoleInputW(handle, records.as_mut_ptr(), 16, &mut read) } != 0
+            && read > 0
+        {
+            let mut saw_esc = false;
+            for r in &records[..read as usize] {
+                if r.event_type == KEY_EVENT
+                    && r.key_event.key_down != 0
+                    && (r.key_event.virtual_key_code == VK_ESCAPE || r.key_event.u_char == 0x1B)
+                {
+                    saw_esc = true;
+                    break;
+                }
+            }
+            let _ = unsafe { ReadConsoleInputW(handle, records.as_mut_ptr(), read, &mut read) };
+            return saw_esc;
+        }
+        false
+    }
+}
+
+pub use raw_input::{check_esc, restore_terminal, RawModeGuard};
+
 const CLEAR_LINE: &str = "\r\x1b[2K";
 const SPINNER_BRAILLE: [&str; 10] = [
     "\u{280b}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283c}", "\u{2834}", "\u{2826}", "\u{2827}",
@@ -120,6 +330,111 @@ pub enum SpinnerKind {
     Antigravity,
 }
 
+#[cfg(unix)]
+fn detect_terminal_width() -> Option<usize> {
+    #[repr(C)]
+    struct Winsize {
+        ws_row: u16,
+        ws_col: u16,
+        ws_xpixel: u16,
+        ws_ypixel: u16,
+    }
+
+    #[link(name = "c")]
+    extern "C" {
+        fn ioctl(fd: i32, request: LibcUlong, ...) -> i32;
+    }
+
+    #[cfg(target_os = "macos")]
+    type LibcUlong = u64;
+    #[cfg(all(unix, not(target_os = "macos")))]
+    type LibcUlong = u64;
+
+    #[cfg(target_os = "macos")]
+    const TIOCGWINSZ: LibcUlong = 0x40087468;
+    #[cfg(all(unix, not(target_os = "macos")))]
+    const TIOCGWINSZ: LibcUlong = 0x5413;
+
+    let mut ws = Winsize {
+        ws_row: 0,
+        ws_col: 0,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+
+    // Try stdout (1), then stdin (0), then stderr (2)
+    for fd in [1, 0, 2] {
+        if unsafe { ioctl(fd, TIOCGWINSZ, &mut ws) } == 0 && ws.ws_col > 0 {
+            return Some(ws.ws_col as usize);
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+fn detect_terminal_width() -> Option<usize> {
+    use std::ffi::c_void;
+    use std::os::windows::io::AsRawHandle;
+
+    #[repr(C)]
+    struct Coord {
+        x: i16,
+        y: i16,
+    }
+
+    #[repr(C)]
+    struct SmallRect {
+        left: i16,
+        top: i16,
+        right: i16,
+        bottom: i16,
+    }
+
+    #[repr(C)]
+    struct ConsoleScreenBufferInfo {
+        size: Coord,
+        cursor_position: Coord,
+        attributes: u16,
+        window: SmallRect,
+        maximum_window_size: Coord,
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetConsoleScreenBufferInfo(
+            handle: *mut c_void,
+            info: *mut ConsoleScreenBufferInfo,
+        ) -> i32;
+    }
+
+    let handle = io::stdout().as_raw_handle();
+    let mut info = std::mem::MaybeUninit::<ConsoleScreenBufferInfo>::uninit();
+    if unsafe { GetConsoleScreenBufferInfo(handle, info.as_mut_ptr()) } != 0 {
+        let info = unsafe { info.assume_init() };
+        let w = (info.window.right - info.window.left + 1).max(0) as usize;
+        if w > 0 {
+            return Some(w);
+        }
+    }
+    None
+}
+
+#[cfg(not(any(unix, windows)))]
+fn detect_terminal_width() -> Option<usize> {
+    None
+}
+
+pub fn current_terminal_width() -> usize {
+    if let Some(w) = detect_terminal_width() {
+        return w.clamp(20, 200);
+    }
+    std::env::var("COLUMNS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(80)
+        .clamp(20, 200)
+}
+
 /// Buffered ANSI writer.
 ///
 /// Design constraints, in order: small binary, low RSS, no terminal state left
@@ -137,11 +452,7 @@ pub struct Ui {
 
 impl Ui {
     pub fn new(color: bool, animate: bool, theme: Theme) -> Self {
-        let width = std::env::var("COLUMNS")
-            .ok()
-            .and_then(|v| v.trim().parse::<usize>().ok())
-            .unwrap_or(80)
-            .clamp(40, 100);
+        let width = current_terminal_width();
         Self {
             out: BufWriter::with_capacity(8 * 1024, io::stdout()),
             line: String::with_capacity(512),
@@ -150,6 +461,13 @@ impl Ui {
             animate,
             theme,
         }
+    }
+
+    /// Refresh the cached terminal width to adapt to dynamic window resizes.
+    #[inline]
+    pub fn refresh_width(&mut self) -> usize {
+        self.width = current_terminal_width();
+        self.width
     }
 
     pub fn stdout_is_tty() -> bool {
@@ -251,6 +569,9 @@ impl Ui {
             if self.out.flush().is_err() {
                 std::process::exit(0);
             }
+            if check_esc() {
+                Self::exit_by_esc();
+            }
             thread::sleep(Duration::from_millis(per_char_ms));
         }
         if self.color && self.theme == Theme::Light {
@@ -304,6 +625,9 @@ impl Ui {
             if self.out.flush().is_err() {
                 std::process::exit(0);
             }
+            if check_esc() {
+                Self::exit_by_esc();
+            }
             thread::sleep(Duration::from_millis(per_char_ms));
         }
         self.write_raw(pad);
@@ -327,9 +651,34 @@ impl Ui {
     /// runs six times faster instead of sleeping for real seconds.
     pub fn pause(&self, ms: u64) {
         let ms = if self.animate { ms } else { ms / 6 };
-        if ms > 0 {
-            thread::sleep(Duration::from_millis(ms));
+        if ms == 0 {
+            if check_esc() {
+                Self::exit_by_esc();
+            }
+            return;
         }
+
+        let step_ms = 25u64;
+        let mut elapsed = 0u64;
+        while elapsed < ms {
+            if check_esc() {
+                Self::exit_by_esc();
+            }
+            let chunk = (ms - elapsed).min(step_ms);
+            thread::sleep(Duration::from_millis(chunk));
+            elapsed += chunk;
+        }
+        if check_esc() {
+            Self::exit_by_esc();
+        }
+    }
+
+    pub fn exit_by_esc() -> ! {
+        restore_terminal();
+        let mut stdout = std::io::stdout();
+        let _ = std::io::Write::write_all(&mut stdout, b"\x1b[?25h\x1b[0m\n");
+        let _ = std::io::Write::flush(&mut stdout);
+        std::process::exit(130);
     }
 
     /// One-line spinner that overwrites itself, reusing the line buffer for
@@ -473,6 +822,11 @@ impl Ui {
 
             if self.out.write_all(line.as_bytes()).is_err() || self.out.flush().is_err() {
                 std::process::exit(0);
+            }
+            if check_esc() {
+                let _ = self.out.write_all(CLEAR_LINE.as_bytes());
+                let _ = self.out.flush();
+                Self::exit_by_esc();
             }
             thread::sleep(Duration::from_millis(step_ms));
         }

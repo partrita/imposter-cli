@@ -4,7 +4,7 @@
 
 ---
 
-## 1. 제로 런타임 의존성 코어 (Zero-Dependency Core)
+## 1. 극단적인 최소 의존성 설계 (Minimal Dependencies)
 
 일반적인 Rust CLI 프로젝트들이 의례적으로 도입하는 대형 라이브러리들을 과감히 배제했습니다:
 
@@ -13,7 +13,7 @@
 - `rand` 크레이트 대신: 16바이트 메모리만 쓰는 고속 `xorshift64*` PRNG ([src/rng.rs](file:///Users/fkt/Downloads/PROJECT/imposter-cli/src/rng.rs))
 - `tokio`, 비동기 런타임, 백그라운드 스레드 일절 없음: 단일 메인 스레드 기반 동기 I/O 루프
 
-선택 기능인 TUI 마법사(`ratatui` + `crossterm`)는 `features = ["tui"]`로 격리되어 있으며, 이를 끈 `--no-default-features` 빌드는 외부 런타임 의존성이 완벽하게 0개이며 바이너리 크기는 약 377 KB에 불과합니다.
+선택 기능인 TUI 마법사(`ratatui` + `crossterm`)는 `features = ["tui"]`로 격리되어 있으며, 이를 끈 `--no-default-features` 빌드는 바이너리 크기가 약 370 KB에 불과합니다.
 
 ---
 

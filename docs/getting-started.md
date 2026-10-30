@@ -22,9 +22,9 @@ cargo install imposter
 cargo install --git https://github.com/partrita/imposter-cli
 ```
 
-### 방법 C: 초소형 제로 의존성 빌드 (TUI 제외)
+### 방법 C: 초경량 최소 의존성 빌드 (TUI 제외)
 
-터미널 마법사(`ratatui` + `crossterm`) 없이 순수 CLI 기능만 377 KB 안팎의 초소형 바이너리로 내려받으려면 `--no-default-features` 플래그를 사용합니다:
+터미널 마법사(`ratatui` + `crossterm`) 없이 순수 CLI 기능만 370 KB 안팎의 초소형 바이너리로 내려받으려면 `--no-default-features` 플래그를 사용합니다:
 
 ```bash
 cargo install imposter --no-default-features

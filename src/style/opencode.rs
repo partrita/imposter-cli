@@ -253,7 +253,7 @@ impl Renderer for Opencode {
         panel_line(ui, ansi::OC_PANEL_BORDER, style, text);
     }
 
-    fn lint_error(&self, ui: &mut Ui) {
+    fn alert(&self, ui: &mut Ui, rng: &mut crate::rng::Rng) {
         let cmd = "cargo clippy --all-targets -- -D warnings";
         panel_blank(ui, ansi::OC_PANEL_BORDER);
         panel_line(
@@ -271,6 +271,7 @@ impl Renderer for Opencode {
         self.edit(ui, "src/api/handlers.rs", "Removed the duplicated branch");
         self.patch(ui, crate::content::LINT_FIX, 54);
         self.bash(ui, cmd, &["0 warnings, 0 errors"]);
+        let _ = rng; // suppress unused warning for now
     }
 
     fn todo(&self, ui: &mut Ui, items: &[&str]) {
